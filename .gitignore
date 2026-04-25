@@ -1,0 +1,48 @@
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+src/owl/models/owl_model.onnx/**
+/src/owl/models/owl_model.onnx/config.json
+/src/owl/models/owl_model.onnx/merges.txt
+/src/owl/models/owl_model.onnx/model.onnx
+/src/owl/models/owl_model.onnx/preprocessor_config.json
+/src/owl/models/owl_model.onnx/special_tokens_map.json
+/src/owl/models/owl_model.onnx/tokenizer.json
+/src/owl/models/owl_model.onnx/tokenizer_config.json
+/src/owl/models/owl_model.onnx/vocab.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Coverage
+.coverage
+tests/htmlcov/
+htmlcov/
+
+# Environment
+.venv/**
+*.egg
+
+# Checkpoints
+ckpts/
+
+# Sample data
+sample_data/
+
+# Visualization output
+output/
+
+# ImGui
+imgui.ini
+

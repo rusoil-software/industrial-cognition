@@ -10,7 +10,7 @@ Project contains the plan in the following files:
 4. [workflow.md](./workflow.md) is a pipleine of development
 5. [tasklist.md](./tasklist.md) is a formatted reference sheet of the project completion
 6. [test-template.md](./test-templates.md) is a simple template for making tests
-7. [Docker File](../Dockerfile)
+7. [Docker File](../src/api/Dockerfile)
 
 ## How to use those files
 
@@ -21,7 +21,7 @@ Follow the following rules when use the files from the links above:
 - Always adhere to the [workflow.md](./workflow.md) when doing anything.
 - Always make tests after looking through the [test-template.md](./test-templates.md)
 - Always update your progress in [tasklist.md](./tasklist.md)
-- Always use the [Docker File](../Dockerfile) as main docker file, do not create others, make all changes there.
+- Always use the [Docker File](../src/api/Dockerfile) as main docker file, do not create others, make all changes there.
 - Always start withg adding a file with description of a new technology or package to the [docs/](../doc/) folder whenever you add it to the project and provide full description of what exactly from this technology or package will be used and how with all proper references and explanations. Always name such file in style `<package-name>.md`.
 - At the end of development (reaching the last stage on [tasklist.md](./tasklist.md)) always create file [onboarding.md](./onboarding.md) with links to all the technology files from above and instructions on how to start working with the project
 

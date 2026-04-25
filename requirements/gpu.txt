@@ -1,2 +1,3 @@
 # Requirements for GPU-aided version
 onnxruntime-gpu==1.24.4
+optimum-onnx[onnxruntime-gpu]==0.1.0

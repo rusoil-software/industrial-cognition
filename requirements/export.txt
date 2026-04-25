@@ -1,0 +1,11 @@
+torch>=2.5.1+cu121
+torchvision>=0.20.1+cu121
+torchaudio>=2.5.1+cu121
+torchtext>=0.17.2+cu121
+torchfile>=0.1.0+cu121
+transformers>=4.35.0
+onnx>=1.15.0
+onnxruntime[transformers]>=1.18.0
+numpy>=1.26.0
+optimum==2.1.0
+optimum-onnx[onnxruntime]>=0.1.0

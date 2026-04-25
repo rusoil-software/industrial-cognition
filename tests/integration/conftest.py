@@ -15,3 +15,15 @@
 # author : Konstantin Ustiuzhanin
 # date   : 2026-Apr-23
 # ==============================================================================
+
+# ---------------------------------------------------------------------------
+# Pytest CLI option for model path
+# ---------------------------------------------------------------------------
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--model-path",
+        action="store",
+        default="src/owl/models/owl_model.onnx/model.onnx",
+        help="Path to the exported OWL 2 ONNX model file.",
+    )

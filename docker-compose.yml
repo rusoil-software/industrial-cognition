@@ -1,0 +1,53 @@
+version: "3.9"
+
+services:
+  owl2-inference:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: owl2-inference
+    ports:
+      - "8000:8000"
+    environment:
+      # Override .env settings as needed
+      ENVIRONMENT: local
+      APP_VERSION: 1.0.0
+      CORS_ORIGINS: '["http://localhost:3000", "http://localhost:8080"]'
+      OWL2_MODEL_PATH: /app/models/owl2_model.onnx
+      OWL2_EXECUTION_PROVIDER: CPUExecutionProvider
+      OWL2_MAX_BATCH_SIZE: 32
+    volumes:
+      # Mount models directory for easy iteration
+      - ./models:/app/models:ro
+      # Mount logs for inspection
+      - ./logs:/app/logs
+    networks:
+      - inference-network
+    # Resource limits prevent runaway consumption
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
+        reservations:
+          cpus: "1"
+          memory: 2G
+    # Restart policy for resilience
+    restart: unless-stopped
+    # Health check (defined in Dockerfile, but can override)
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/api/v1/inference/owl2/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  inference-network:
+    driver: bridge

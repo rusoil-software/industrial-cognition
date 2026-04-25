@@ -1,0 +1,72 @@
+name: Export ONNX Model
+
+on:
+  # Trigger manually from GitHub Actions UI
+  workflow_dispatch:
+    inputs:
+      model_variant:
+        description: "Model variant to export"
+        required: true
+        default: "owlv2-base"
+        type: choice
+        options:
+          - owlv2-base
+          - owlv2-large
+      optimize:
+        description: "Optimize ONNX model after export"
+        required: false
+        default: "true"
+        type: boolean
+
+  # Also trigger when export requirements change
+  push:
+    branches: [ main ]
+    paths:
+      - "requirements/export.txt"
+      - "src/owl/inference/utils.py"
+      - "scripts/export_model.py"
+
+jobs:
+  export:
+    name: Export ${{ inputs.model_variant || 'owlv2-base' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-export-${{ hashFiles('requirements/export.txt') }}
+
+      - name: Install export dependencies
+        run: pip install -r requirements/export.txt
+
+      - name: Cache HuggingFace model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: ${{ runner.os }}-hf-${{ inputs.model_variant || 'owlv2-base' }}-v1
+
+      - name: Export model
+        run: |
+          mkdir -p models
+          python scripts/export_model.py \
+            --model ${{ inputs.model_variant || 'owlv2-base' }} \
+            --output models/owl2_model.onnx \
+            --device cpu \
+            ${{ (inputs.optimize == 'true' || inputs.optimize == '') && '--optimize' || '--no-optimize' }}
+
+      - name: Upload ONNX model as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: owl2-onnx-${{ inputs.model_variant || 'owlv2-base' }}-${{ github.sha }}
+          path: models/owl2_model.onnx
+          # Keep for 30 days so downstream jobs can download it
+          retention-days: 30

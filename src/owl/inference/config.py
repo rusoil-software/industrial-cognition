@@ -17,9 +17,9 @@
 # ==============================================================================
 
 from pathlib import Path
-from pydantic_settings import BaseSettings
+
 from pydantic import ConfigDict
-from pathlib import Path
+from pydantic_settings import BaseSettings
 
 
 class InferenceConfig(BaseSettings):
@@ -27,7 +27,7 @@ class InferenceConfig(BaseSettings):
     OWL2_EXECUTION_PROVIDER: str = "CPUExecutionProvider"
     OWL2_MAX_BATCH_SIZE: int = 32
 
-    model_config = ConfigDict(env_file=".env")
+    model_config = ConfigDict()
 
 
 inference_settings = InferenceConfig()
