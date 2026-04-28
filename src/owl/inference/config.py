@@ -23,7 +23,7 @@ from pydantic_settings import BaseSettings
 
 
 class InferenceConfig(BaseSettings):
-    OWL2_MODEL_PATH: Path = Path("models/owl2_model.onnx")
+    OWL2_MODEL_PATH: Path = Path("src") / "owl" / "models" / "owl_model.onnx" / "model.onnx"
     OWL2_EXECUTION_PROVIDER: str = "CPUExecutionProvider"
     OWL2_MAX_BATCH_SIZE: int = 32
 
