@@ -47,7 +47,12 @@ import pytest
 import requests
 from PIL import Image
 from httpx import ASGITransport, AsyncClient
+import asyncio
 from transformers import Owlv2Processor
+from multiprocessing import Process
+import uvicorn
+from uvicorn.config import Config
+from uvicorn.server import Server
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'src')))
 
@@ -70,6 +75,14 @@ def model_path(request) -> Path:
 # ---------------------------------------------------------------------------
 # Shared fixtures (session-scoped: load once, reuse across all tests)
 # ---------------------------------------------------------------------------
+def run_uvicorn():
+    config = Config(app=app, host="127.0.0.1", port=8000, log_level="debug")
+    server = Server(config=config)
+
+    # Use a new event loop for the subprocess
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(server.serve())
 
 @pytest.fixture(scope="session")
 def ort_session(model_path: Path):
@@ -202,11 +215,11 @@ def get_detections(
     boxes_norm = outputs.pred_boxes  # [num_patches, 4]
     boxes_px = cx_cy_wh_to_xyxy(
         boxes_norm, outputs.image_width, outputs.image_height
-    )
+    )[0]
 
     # Best query class per patch
-    best_scores = scores.max(axis=-1)  # [num_patches]
-    best_classes = scores.argmax(axis=-1)  # [num_patches]
+    best_scores = scores.max(axis=-1)[0]  # [1,num_patches]
+    best_classes = scores.argmax(axis=-1)[0]  # [1, num_patches]
 
     detections = []
     for patch_idx in range(len(best_scores)):
@@ -418,7 +431,7 @@ class TestServiceIntegration:
         from src.owl.inference.service import OWL2InferenceService
 
         service = OWL2InferenceService(
-            model_path=Path("dummy.onnx"),
+            model_path=Path("src") / "owl" / "models" / "owl_model.onnx" / "model.onnx",
             execution_provider="CPUExecutionProvider",
         )
         # Inject the real session
@@ -446,9 +459,9 @@ class TestServiceIntegration:
         request = OWL2BatchRequest(
             inputs=[
                 OWL2InputItem(
-                    pixel_values=inputs["pixel_values"].tolist(),
-                    input_ids=inputs["input_ids"].tolist(),
-                    attention_mask=inputs["attention_mask"].tolist(),
+                    pixel_values=inputs["pixel_values"][0].tolist(),
+                    input_ids=inputs["input_ids"][0].tolist(),
+                    attention_mask=inputs["attention_mask"][0].tolist(),
                 )
             ]
         )
@@ -478,9 +491,9 @@ class TestServiceIntegration:
         request = OWL2BatchRequest(
             inputs=[
                 OWL2InputItem(
-                    pixel_values=inputs["pixel_values"].tolist(),
-                    input_ids=inputs["input_ids"].tolist(),
-                    attention_mask=inputs["attention_mask"].tolist(),
+                    pixel_values=inputs["pixel_values"][0].tolist(),
+                    input_ids=inputs["input_ids"][0].tolist(),
+                    attention_mask=inputs["attention_mask"][0].tolist(),
                 )
             ]
         )
@@ -501,30 +514,55 @@ class TestServiceIntegration:
 class TestAPIEndpoint:
     """Test the actual FastAPI endpoint with the real service."""
 
-    @pytest.fixture
-    async def client(self) -> AsyncGenerator[AsyncClient, None]:
-        """Async test client."""
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
-            yield ac
+    @pytest.fixture(scope="session")
+    async def live_server(self):
+        import threading
+        # Use threading instead of multiprocessing for reliability on Windows
+        if sys.platform == "win32":
+            thread = threading.Thread(target=run_uvicorn, daemon=True)
+            thread.start()
+        else:
+            proc = Process(target=run_uvicorn, daemon=True)
+            proc.start()
 
-    @pytest.fixture(autouse=True)
-    def override_service(self, service):
-        """Override the service dependency with the real one."""
-        from src.owl.inference.service import get_inference_service
+        # Wait for the server to be ready using health check
+        import time
+        import httpx
+        start_time = time.time()
+        timeout = 30  # seconds
+        while time.time() - start_time < timeout:
+            try:
+                # Make a HEAD request to avoid processing response body
+n                response = httpx.head("http://127.0.0.1:8000/api/v1/inference/owl2/health")
+                if response.status_code == 200:
+                    break
+            except httpx.ConnectError:
+                pass  # Server is not up yet
+            time.sleep(0.1)  # Short sleep before retry
+        else:
+            raise RuntimeError("Server failed to start within timeout period")
 
-        app.dependency_overrides[get_inference_service] = lambda: service
-        yield
-        app.dependency_overrides.clear()
+        yield "http://127.0.0.1:8000"
+
+        if sys.platform != "win32":
+            # Clean shutdown
+            proc.terminate()
+            proc.join()
+            # Re-join to ensure cleanup
+            if proc.is_alive():
+                proc.kill()
+        # No need to join daemon threads; they will terminate with the main process.
+        # TODO: For a clean shutdown, we could implement a more complex stoppable server.
 
     @pytest.mark.asyncio
     async def test_endpoint_detects_cats(
             self,
-            client: AsyncClient,
             processor,
             coco_cats_image,
+            live_server,
     ):
         """POST /api/v1/inference/owl2/detect should detect cats."""
+
         inputs = processor(
             text=[["a photo of a cat", "a photo of a dog"]],
             images=coco_cats_image,
@@ -535,16 +573,17 @@ class TestAPIEndpoint:
             "inputs": [
                 {
                     "pixel_values": inputs["pixel_values"].tolist(),
-                    "input_ids": inputs["input_ids"].tolist(),
-                    "attention_mask": inputs["attention_mask"].tolist(),
+                    "input_ids": [inputs["input_ids"].tolist()],
+                    "attention_mask": [inputs["attention_mask"].tolist()],
                 }
             ]
         }
 
-        response = await client.post(
-            "/api/v1/inference/owl2/detect",
-            json=payload,
-        )
+        async with AsyncClient(base_url=live_server) as ac:
+            response = await ac.post(
+                "/api/v1/inference/owl2/detect",
+                json=payload,
+            )
 
         assert response.status_code == 200
         body = response.json()
