@@ -23,7 +23,7 @@ pytest tests/integration/test_owl.py::TestServiceIntegration -v
 pytest tests/integration/test_owl.py::TestAPIEndpoint -v
 
 # Run with custom model path
-pytest tests/integration/test_integration.py \
+pytest tests/integration/test_owl.py \
   --model-path /path/to/custom/owl2.onnx \
   -v -s
 
