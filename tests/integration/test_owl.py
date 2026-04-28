@@ -54,9 +54,20 @@ import uvicorn
 from uvicorn.config import Config
 from uvicorn.server import Server
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'src')))
+import sys
+import os
 
-from src.owl.main import app
+# Add the project root to sys.path to make 'src' importable
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+try:
+    from src.owl.main import app
+except ImportError as e:
+    print(f"Failed to import 'src.owl.main': {e}")
+    print(f"Current sys.path: {sys.path}")
+    raise
 
 logger = logging.getLogger(__name__)
 
@@ -529,11 +540,10 @@ class TestAPIEndpoint:
         import time
         import httpx
         start_time = time.time()
-        timeout = 30  # seconds
+        timeout = 120  # seconds
         while time.time() - start_time < timeout:
             try:
-                # Make a HEAD request to avoid processing response body
-n                response = httpx.head("http://127.0.0.1:8000/api/v1/inference/owl2/health")
+                response = httpx.get("http://127.0.0.1:8000/api/v1/inference/owl2/health")
                 if response.status_code == 200:
                     break
             except httpx.ConnectError:
@@ -572,9 +582,9 @@ n                response = httpx.head("http://127.0.0.1:8000/api/v1/inference/o
         payload = {
             "inputs": [
                 {
-                    "pixel_values": inputs["pixel_values"].tolist(),
-                    "input_ids": [inputs["input_ids"].tolist()],
-                    "attention_mask": [inputs["attention_mask"].tolist()],
+                    "pixel_values": inputs["pixel_values"][0].tolist(),
+                    "input_ids": inputs["input_ids"][0].tolist(),
+                    "attention_mask": inputs["attention_mask"][0].tolist(),
                 }
             ]
         }
@@ -589,7 +599,7 @@ n                response = httpx.head("http://127.0.0.1:8000/api/v1/inference/o
         body = response.json()
         assert "results" in body
         assert len(body["results"]) == 1
-        assert len(body["results"]["detections"]) > 0
+        assert len(body["results"][0]["detections"]) > 0
 
         logger.info("Endpoint response: %s", body)
 

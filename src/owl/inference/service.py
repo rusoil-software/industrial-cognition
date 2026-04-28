@@ -62,7 +62,8 @@ class OWL2InferenceService:
         )
         # Store metadata for response tracing
         meta = self._session.get_modelmeta()
-        self._model_version = meta.version or "1.0"
+        # Ensure model_version is a string
+        self._model_version = str(meta.version) if meta.version is not None else "2.0"
         logger.info("OWL 2 model loaded. Version: %s", self._model_version)
 
     def unload(self) -> None:
@@ -127,8 +128,9 @@ class OWL2InferenceService:
             # Unpack OWL 2 outputs: logits [1, num_queries, num_classes],
             # pred_boxes [1, num_queries, 4]
             logits, pred_boxes = outputs, outputs[1]
-            scores = _sigmoid(logits)  # [num_queries, num_classes]
-            boxes = pred_boxes  # [num_queries, 4]
+
+            scores = _sigmoid(logits[0])  # [num_queries, num_classes]
+            boxes = pred_boxes[0]  # [num_queries, 4]
 
             detections = _build_detections(scores, boxes)
             results.append(OWL2InferenceResult(index=idx, detections=detections))
@@ -150,12 +152,12 @@ def _build_detections(
         score_threshold: float = 0.1,
 ) -> list[DetectionBox]:
     detections: list[DetectionBox] = []
-    max_scores = scores.max(axis=-1)  # [num_queries]
-    best_classes = scores.argmax(axis=-1)  # [num_queries]
-
+    max_scores = scores[0].max(axis=-1)  # [num_queries]
+    best_classes = scores[0].argmax(axis=-1)  # [num_queries]
     for query_idx, (score, cls_idx) in enumerate(zip(max_scores, best_classes)):
         if float(score) < score_threshold:
             continue
+
         detections.append(
             DetectionBox(
                 box=boxes[query_idx].tolist(),
