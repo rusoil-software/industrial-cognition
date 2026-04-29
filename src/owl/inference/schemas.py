@@ -44,7 +44,7 @@ class OWL2BatchRequest(BaseModel):
             if len(item.attention_mask) != len(item.input_ids):
                 raise ValueError(
                     "attention_mask length must match input_ids length."
-                )
+                ) from None
         return self
 
 
