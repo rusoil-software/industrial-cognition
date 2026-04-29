@@ -69,6 +69,12 @@ except ImportError as e:
     print(f"Current sys.path: {sys.path}")
     raise
 
+from src.owl.inference.exceptions import (
+    InferenceFailedException,
+    InvalidInputShapeException
+)
+import onnxruntime as ort
+
 logger = logging.getLogger(__name__)
 
 
@@ -408,9 +414,9 @@ class TestONNXModelDetectsObjects:
             assert y2 > y1, f"Box y2 ({y2:.1f}) must be greater than y1 ({y1:.1f})"
 
 
-def test_batch_inference(self, ort_session, processor, coco_cats_image):
+def test_batch_inference(ort_session, processor, coco_cats_image):
     """Test inference with a batch of 2 identical images."""
-    text_queries = [["a photo of a cat"]]
+    text_queries = [["a photo of a cat", "a photo of a cat"]]
 
     # Preprocess batch of 2 images
     inputs = processor(
@@ -419,18 +425,23 @@ def test_batch_inference(self, ort_session, processor, coco_cats_image):
         return_tensors="np",
     )
 
-    batch_outputs = ort_session.run(
-        None,
-        {
-            "pixel_values": inputs["pixel_values"].astype(np.float32),
-            "input_ids": inputs["input_ids"].astype(np.int64),
-            "attention_mask": inputs["attention_mask"].astype(np.int64),
-        },
-    )
+    try:
+        batch_outputs = ort_session.run(
+            None,
+            {
+                "pixel_values": inputs["pixel_values"],
+                "input_ids": inputs["input_ids"],
+                "attention_mask": inputs["attention_mask"],
+            },
+        )
+    except ort.capi.onnxruntime_pybind11_state.InvalidArgument as exc:
+        raise InvalidInputShapeException(str(exc)) from exc
+    except Exception as exc:
+        raise InferenceFailedException(str(exc)) from exc
 
-    logits, pred_boxes = batch_outputs, batch_outputs
-    assert logits.shape == 2, "Batch size should be 2"
-    assert pred_boxes.shape == 2, "Batch size should be 2"
+    logits, pred_boxes = batch_outputs[0], batch_outputs[1]
+    assert logits.shape[0] == 2, "Batch size should be 2"
+    assert pred_boxes.shape[0] == 2, "Batch size should be 2"
 
 
 class TestServiceIntegration:
@@ -447,7 +458,7 @@ class TestServiceIntegration:
         )
         # Inject the real session
         service._session = ort_session
-        service._model_version = "1.0"
+        service._model_version = "2.0"
         return service
 
     def test_service_run_batch(
