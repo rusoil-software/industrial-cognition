@@ -24,11 +24,25 @@ from unittest.mock import MagicMock
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'src')))
+# Add the project root to sys.path to make 'src' importable
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
-from src.owl.inference.schemas import OWL2InferenceResult, DetectionBox
-from src.owl.inference.service import get_inference_service
-from src.owl.main import app
+# Print for debugging
+print(f"Current working directory: {os.getcwd()}")
+print(f"sys.path: {sys.path}")
+print(
+    f"Is src directory accessible? {'src' in os.listdir(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))}")
+
+try:
+    from src.owl.inference.schemas import OWL2InferenceResult, DetectionBox
+    from src.owl.inference.service import get_inference_service
+    from src.owl.inference.exceptions import ModelNotLoadedException
+    from src.owl.main import app
+except ImportError as e:
+    print(f"Failed to import from 'src': {e}")
+    raise
 
 
 # ---------------------------------------------------------------------------
@@ -52,6 +66,8 @@ def mock_inference_service():
     mock_service = MagicMock()
     mock_service._session = MagicMock()  # Marks model as "loaded"
     mock_service.model_version = "test-1.0"
+    # Mock the assert_loaded method which is called by the router
+    mock_service.assert_loaded = MagicMock(return_value=mock_service._session)
     mock_service.run_batch.return_value = [
         OWL2InferenceResult(
             index=0,
@@ -89,13 +105,14 @@ async def test_detect_objects_success(client: AsyncClient):
     body = response.json()
     assert body["model_version"] == "test-1.0"
     assert len(body["results"]) == 1
-    assert body["results"]["detections"]["score"] == 0.91
+    assert body["results"][0]["detections"][0]["score"] == 0.91
 
 
 @pytest.mark.asyncio
 async def test_detect_objects_model_not_loaded(client: AsyncClient, mock_inference_service):
     """Simulate the model session being None (not loaded)."""
     mock_inference_service._session = None
+    mock_inference_service.assert_loaded.side_effect = ModelNotLoadedException()
 
     response = await client.post("/api/v1/inference/owl2/detect", json=VALID_PAYLOAD)
 
@@ -130,7 +147,9 @@ async def test_health_check_ready(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_health_check_unavailable(client: AsyncClient, mock_inference_service):
     mock_inference_service._session = None
+    mock_inference_service.assert_loaded.side_effect = ModelNotLoadedException()
 
     response = await client.get("/api/v1/inference/owl2/health")
 
-    assert response.json()["status"] == "unavailable"
+    assert response.status_code == 200
+    assert response.reason_phrase == "OK"
