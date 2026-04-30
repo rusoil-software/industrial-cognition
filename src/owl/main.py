@@ -20,7 +20,10 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from fastapi import FastAPI
+from fastapi import Request
+from fastapi import status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from src.owl.config import settings
 from src.owl.exceptions import register_exception_handlers
@@ -65,6 +68,14 @@ def create_application() -> FastAPI:
     app = FastAPI(**app_configs)
 
     register_exception_handlers(app)  # <-- add this line
+
+    # Customized Exception Handler: Value Error exception handler
+    @app.exception_handler(ValueError)
+    async def value_error_handler(request: Request, exc: ValueError):
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={"detail": str(exc)}
+        )
 
     # --- Middleware ---
     app.add_middleware(

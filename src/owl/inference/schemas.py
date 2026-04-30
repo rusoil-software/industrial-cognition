@@ -16,6 +16,7 @@
 # date   : 2026-Apr-23
 # ==============================================================================
 
+from fastapi import HTTPException, status
 from pydantic import BaseModel, Field, model_validator
 
 
@@ -42,9 +43,10 @@ class OWL2BatchRequest(BaseModel):
     def check_attention_mask_length(self) -> "OWL2BatchRequest":
         for item in self.inputs:
             if len(item.attention_mask) != len(item.input_ids):
-                raise ValueError(
-                    "attention_mask length must match input_ids length."
-                ) from None
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="attention_mask length must match input_ids length."
+                )
         return self
 
 
