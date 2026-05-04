@@ -1,6 +1,6 @@
-torch>=2.5.1+cu121
-torchvision>=0.20.1+cu121
-torchaudio>=2.5.1+cu121
+torch[cuda]==2.11.0
+torchvision[cuda]==0.26.0
+torchaudio[cuda]==2.11.0
 torchtext>=0.17.2+cu121
 torchfile>=0.1.0+cu121
 transformers>=4.35.0
