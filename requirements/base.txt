@@ -1,5 +1,5 @@
 # Main Project requirements
-opencv-python==4.11.0.86
+opencv-contrib-python==4.11.0.86
 onnxruntime==1.24.4
 onnxscript>=0.7.1.dev20260422
 numpy<2.0.0

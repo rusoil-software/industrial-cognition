@@ -15,253 +15,667 @@
 # limitations under the License.
 #
 # author : Konstantin Ustiuzhanin
-# date   : 2026-05-03 (fixed)
+# date   : 2026-05-07 (optimised v5)
 # ==============================================================================
 
 """
-Proof-of-work script for real-time object detection using OWLv2 (ONNX Runtime) and OpenCV.
-Fixed preprocessing (letterbox) and coordinate mapping.
+Real-time object detection: OWLv2 (ONNX Runtime) + OpenCV tracking pipeline.
+FIXES:
+  - Joint label tokenization (all labels in one forward pass).
+  - Robust postprocessing that works with dynamic‑batch ONNX exports.
 """
+
+from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
+import threading
 import time
+from collections import deque
 from pathlib import Path
-from typing import List, Tuple
+from typing import Deque, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
 import onnxruntime as ort
 from transformers import CLIPTokenizer
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(threadName)s] %(levelname)s - %(message)s",
+)
 logger = logging.getLogger(__name__)
 
+Detection = Tuple[List[int], str, float]  # ([x1,y1,x2,y2], label, conf)
+TimedFrame = Tuple[float, np.ndarray]  # (perf_counter timestamp, bgr frame)
+
+
+# ══════════════════════════════════════════════════════════════
+#  Utilities
+# ══════════════════════════════════════════════════════════════
 
 def parse_labels(label_str: str) -> List[str]:
-    return [l.strip() for l in label_str.split(",") if l.strip()]
+    return [s.strip() for s in label_str.split(",") if s.strip()]
 
+
+def box_iou_single(a: List[int], boxes: np.ndarray) -> np.ndarray:
+    """IoU of one box against an (N,4) array."""
+    if not len(boxes):
+        return np.array([], dtype=np.float32)
+    ax1, ay1, ax2, ay2 = a
+    ix1 = np.maximum(ax1, boxes[:, 0])
+    iy1 = np.maximum(ay1, boxes[:, 1])
+    ix2 = np.minimum(ax2, boxes[:, 2])
+    iy2 = np.minimum(ay2, boxes[:, 3])
+    inter = (ix2 - ix1).clip(0) * (iy2 - iy1).clip(0)
+    area_a = max((ax2 - ax1) * (ay2 - ay1), 1)
+    area_b = ((boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])).clip(1)
+    return inter / (area_a + area_b - inter + 1e-6)
+
+
+# ══════════════════════════════════════════════════════════════
+#  Main‑thread camera capture with ring buffer
+# ══════════════════════════════════════════════════════════════
+
+class CameraCapture:
+    """Main‑loop frame capture – NO separate thread."""
+
+    _RING_MAXLEN = 120
+
+    def __init__(self, camera_id: int, width: int, height: int) -> None:
+        self._cap = cv2.VideoCapture(camera_id)
+        if not self._cap.isOpened():
+            raise RuntimeError(f"Cannot open camera {camera_id}")
+        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        self._ring: Deque[TimedFrame] = deque(maxlen=self._RING_MAXLEN)
+
+    def grab(self) -> Optional[Tuple[np.ndarray, float]]:
+        ok, frame = self._cap.read()
+        if not ok:
+            return None
+        ts = time.perf_counter()
+        frame_copy = frame.copy()
+        self._ring.append((ts, frame_copy))
+        return frame_copy, ts
+
+    def frames_since(self, ts: float) -> List[TimedFrame]:
+        return [(t, f.copy()) for t, f in self._ring if t > ts]
+
+    def release(self) -> None:
+        self._cap.release()
+
+
+# ══════════════════════════════════════════════════════════════
+#  Tracker pool
+# ══════════════════════════════════════════════════════════════
+
+class TrackerPool:
+    """One lightweight OpenCV tracker per active detection."""
+
+    def __init__(self, tracker_type: str = "CSRT") -> None:
+        self._type = tracker_type.upper()
+        self._trackers: List[cv2.Tracker] = []
+        self._meta: List[Tuple[str, float]] = []
+
+    def reset(self, seed_frame: np.ndarray, detections: List[Detection]) -> None:
+        self._trackers, self._meta = [], []
+        for (x1, y1, x2, y2), label, conf in detections:
+            w, h = x2 - x1, y2 - y1
+            if w <= 0 or h <= 0:
+                continue
+            tr = self._make()
+            tr.init(seed_frame, (x1, y1, w, h))
+            self._trackers.append(tr)
+            self._meta.append((label, conf))
+        logger.debug("TrackerPool seeded: %d trackers", len(self._trackers))
+
+    def replay(self, frames: List[TimedFrame]) -> None:
+        if not frames or not self._trackers:
+            return
+        survival = [True] * len(self._trackers)
+        for _, frame in frames:
+            for idx, (tr, (label, _)) in enumerate(zip(self._trackers, self._meta)):
+                if not survival[idx]:
+                    continue
+                ok, _ = tr.update(frame)
+                if not ok:
+                    survival[idx] = False
+                    logger.debug("Tracker lost during replay: %s", label)
+        alive_tr, alive_meta = [], []
+        for idx, (tr, meta) in enumerate(zip(self._trackers, self._meta)):
+            if survival[idx]:
+                alive_tr.append(tr)
+                alive_meta.append(meta)
+        self._trackers, self._meta = alive_tr, alive_meta
+        logger.debug("Replay complete over %d frames; %d trackers alive",
+                     len(frames), len(self._trackers))
+
+    def update(self, frame: np.ndarray) -> Tuple[List[Detection], bool]:
+        alive_tr, alive_meta, results = [], [], []
+        any_lost = False
+        for tr, (label, conf) in zip(self._trackers, self._meta):
+            ok, rect = tr.update(frame)
+            if ok:
+                x, y, w, h = (int(v) for v in rect)
+                results.append(([x, y, x + w, y + h], label, conf))
+                alive_tr.append(tr)
+                alive_meta.append((label, conf))
+            else:
+                any_lost = True
+                logger.debug("Tracker lost: %s", label)
+        self._trackers, self._meta = alive_tr, alive_meta
+        return results, any_lost
+
+    def _make(self) -> cv2.Tracker:
+        if self._type == "CSRT":
+            return cv2.TrackerCSRT.create()
+        elif self._type == "KCF":
+            return cv2.TrackerKCF.create()
+        elif self._type == "MOSSE":
+            return cv2.legacy.TrackerMOSSE_create()
+        raise ValueError(f"Unknown tracker: {self._type}")
+
+
+# ══════════════════════════════════════════════════════════════
+#  Scene watcher
+# ══════════════════════════════════════════════════════════════
+
+class SceneWatcher:
+    def __init__(
+            self,
+            redetect_interval: float = 8.0,
+            fg_blob_min_area: int = 2000,
+            fg_overlap_thr: float = 0.15,
+            mog2_history: int = 60,
+    ) -> None:
+        self._interval = redetect_interval
+        self._blob_min_area = fg_blob_min_area
+        self._overlap_thr = fg_overlap_thr
+        self._bg_sub = cv2.createBackgroundSubtractorMOG2(
+            history=mog2_history, varThreshold=50, detectShadows=False,
+        )
+        self._last_ts = 0.0
+        self._kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+
+    def check(
+            self, frame: np.ndarray, tracker_lost: bool, live_boxes: List[List[int]],
+    ) -> Tuple[bool, str]:
+        if tracker_lost:
+            self._last_ts = time.perf_counter()
+            return True, "tracker_loss"
+        now = time.perf_counter()
+        if now - self._last_ts >= self._interval:
+            self._last_ts = now
+            return True, "interval"
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        fgmask = self._bg_sub.apply(gray)
+        fgmask = cv2.morphologyEx(fgmask, cv2.MORPH_OPEN, self._kernel)
+        fgmask = cv2.morphologyEx(fgmask, cv2.MORPH_DILATE, self._kernel)
+        contours, _ = cv2.findContours(fgmask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        boxes_arr = np.array(live_boxes, dtype=np.float32) if live_boxes else np.empty((0, 4))
+        for cnt in contours:
+            if cv2.contourArea(cnt) < self._blob_min_area:
+                continue
+            bx, by, bw, bh = cv2.boundingRect(cnt)
+            blob = [bx, by, bx + bw, by + bh]
+            if len(boxes_arr) == 0 or box_iou_single(blob, boxes_arr).max() < self._overlap_thr:
+                self._last_ts = now
+                return True, "new_foreground"
+        return False, ""
+
+
+# ══════════════════════════════════════════════════════════════
+#  OWLv2 detector – joint label inference with robust postprocessing
+# ══════════════════════════════════════════════════════════════
 
 class OWLv2ONNXDetector:
-    def __init__(self, model_path: Path, device: str = "cpu"):
+    IMAGE_SIZE = 960
+    MEAN = np.array([0.48145466, 0.4578275, 0.40821073], dtype=np.float32)
+    STD = np.array([0.26862954, 0.26130258, 0.27577711], dtype=np.float32)
+
+    def __init__(self, model_path: Path, device: str = "cpu") -> None:
         if not model_path.exists():
             raise FileNotFoundError(f"Model not found: {model_path}")
+        opts = ort.SessionOptions()
+        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        nc = os.cpu_count() or 4
+        opts.intra_op_num_threads = nc
+        opts.inter_op_num_threads = max(1, nc // 2)
+        opts.enable_mem_pattern = False
 
-        providers = []
+        self._use_cuda = False
+        providers, popts = [], []
         if device == "cuda" and "CUDAExecutionProvider" in ort.get_available_providers():
             providers.append("CUDAExecutionProvider")
-        providers.append("CPUExecutionProvider")
-        self.session = ort.InferenceSession(str(model_path), providers=providers)
+            popts.append({
+                "gpu_mem_limit": str(6 * 1024 ** 3),
+                "arena_extend_strategy": "kNextPowerOfTwo",
+                "cudnn_conv_algo_search": "EXHAUSTIVE",
+                "do_copy_in_default_stream": "1",
+            })
+            self._use_cuda = True
+        providers.append("CPUExecutionProvider");
+        popts.append({})
 
-        self.input_names = [inp.name for inp in self.session.get_inputs()]
-        self.output_names = [out.name for out in self.session.get_outputs()]
-        logger.info(f"Model inputs: {self.input_names}")
-        logger.info(f"Model outputs: {self.output_names}")
+        self.session = ort.InferenceSession(
+            str(model_path), sess_options=opts,
+            providers=providers, provider_options=popts,
+        )
+        self.input_names = [i.name for i in self.session.get_inputs()]
+        self.output_names = [o.name for o in self.session.get_outputs()]
+        logger.info("Inputs : %s", self.input_names)
+        logger.info("Outputs: %s", self.output_names)
 
-        # Load tokenizer – same as used during ONNX export (clip-vit-base-patch32)
         self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
-        self.image_size = 960
-        self.mean = np.array([0.48145466, 0.4578275, 0.40821073], dtype=np.float32)
-        self.std = np.array([0.26862954, 0.26130258, 0.27577711], dtype=np.float32)
+        S = self.IMAGE_SIZE
+        self._pad_buf = np.zeros((S, S, 3), dtype=np.float32)
 
-    def _letterbox(self, image: np.ndarray) -> Tuple[np.ndarray, Tuple[float, int, int]]:
-        h, w = image.shape[:2]
-        scale = self.image_size / max(h, w)
-        new_w, new_h = int(w * scale), int(h * scale)
-        resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        self._iob: Optional[ort.IOBinding] = None
+        if self._use_cuda:
+            self._iob = self.session.io_binding()
+            logger.info("CUDA IO-Binding enabled")
 
-        pad_left = (self.image_size - new_w) // 2
-        pad_top = (self.image_size - new_h) // 2
-        padded = np.full((self.image_size, self.image_size, 3), 0.0, dtype=np.float32)
-        padded[pad_top:pad_top + new_h, pad_left:pad_left + new_w] = resized
-        return padded, (scale, pad_left, pad_top)
-
-    def preprocess(self, image: np.ndarray) -> Tuple[np.ndarray, Tuple[float, int, int]]:
-        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-        padded, transform = self._letterbox(rgb)
-        normalized = (padded - self.mean) / self.std
-        chw = np.transpose(normalized, (2, 0, 1))
-        batch = np.expand_dims(chw, axis=0).astype(np.float32)
-        return batch, transform
-
-    def tokenize_labels(self, labels: List[str]) -> Tuple[np.ndarray, np.ndarray]:
-        """Return input_ids and attention_mask of shape (1, seq_len)."""
-        # OWLv2 expects a single batch of text, with each label separated by a special token.
-        # We'll join all labels with a delimiter and tokenize.
-        # For simplicity, tokenize each label separately and stack? Actually
-        # the exported model usually expects one text sequence per image.
-        # Let's replicate the HF pipeline: tokenize the list of labels directly.
-        tokenized = self.tokenizer(
+    def _tokens(self, labels: List[str]) -> Tuple[np.ndarray, np.ndarray]:
+        tok = self.tokenizer(
             labels,
             padding="max_length",
-            max_length=16,  # as used in the export script
+            max_length=16,
             truncation=True,
-            return_tensors="np"
+            return_tensors="np",
         )
-        return tokenized["input_ids"], tokenized["attention_mask"]
+        return tok["input_ids"], tok["attention_mask"]
 
-    def postprocess(self, outputs: List[np.ndarray], confidence_threshold: float,
-                    original_shape: Tuple[int, int], transform: Tuple[float, int, int],
-                    labels: List[str]) -> List[Tuple[List[int], str, float]]:
-        # Identify logits and pred_boxes
-        logits = None
-        pred_boxes = None
+    def preprocess(self, image: np.ndarray) -> Tuple[np.ndarray, Tuple[float, int, int]]:
+        S = self.IMAGE_SIZE
+        h, w = image.shape[:2]
+        scale = S / max(h, w)
+        nw, nh = int(w * scale), int(h * scale)
+        pl = (S - nw) // 2
+        pt = (S - nh) // 2
+        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        resized = cv2.resize(rgb, (nw, nh), interpolation=cv2.INTER_AREA)
+        self._pad_buf[:] = 0.0
+        self._pad_buf[pt:pt + nh, pl:pl + nw] = resized.astype(np.float32) * (1.0 / 255.0)
+        self._pad_buf -= self.MEAN
+        self._pad_buf /= self.STD
+        batch = np.ascontiguousarray(self._pad_buf.transpose(2, 0, 1)[np.newaxis])
+        return batch, (scale, pl, pt)
+
+    def postprocess(
+            self, outputs: List[np.ndarray], conf_thr: float,
+            orig_shape: Tuple[int, int], transform: Tuple[float, int, int],
+            labels: List[str],
+    ) -> List[Detection]:
+        # 1. Find logits and pred_boxes from outputs
+        logits = pred_boxes = None
         for i, name in enumerate(self.output_names):
-            if "logits" in name.lower() and i < len(outputs):
-                logits = outputs[i]
-            elif "pred_boxes" in name.lower() and i < len(outputs):
-                pred_boxes = outputs[i]
-
+            lo = name.lower()
+            if "logits" in lo and logits is None:
+                logits = outputs[i][0]
+            elif "pred_boxes" in lo and pred_boxes is None:
+                pred_boxes = outputs[i][0]
         if logits is None or pred_boxes is None:
-            logger.warning("Could not find logits or pred_boxes in outputs")
+            logger.warning("Missing logits or pred_boxes in model outputs")
             return []
 
-        # Squeeze extra dims
-        if logits.ndim == 3 and logits.shape[2] == 1:
-            logits = np.squeeze(logits, axis=2)
-        if pred_boxes.ndim == 3 and pred_boxes.shape[0] == 1:
-            pred_boxes = np.squeeze(pred_boxes, axis=0)
+        # 2. Remove trivial dimensions and any leading batch dim of size 1
+        for arr, name in [(logits, "logits"), (pred_boxes, "pred_boxes")]:
+            arr = np.squeeze(arr)  # remove all size-1 dims
+            if arr.ndim == 3 and arr.shape[0] == 1:
+                arr = arr[0]  # remove explicit batch dim
+        # After this:
+        #   pred_boxes must be 2D: (num_boxes, 4)
+        #   logits    must be 2D: (num_boxes, num_queries) or (num_queries, num_boxes)
 
-        # logits shape: (num_queries, num_boxes)  OR (num_boxes, num_queries)
-        # Typically OWLv2 ONNX exports logits as (num_queries, num_boxes)
-        # Let's detect based on shape
+        if pred_boxes.ndim != 2 or pred_boxes.shape[1] != 4:
+            logger.warning(f"Unexpected pred_boxes shape: {pred_boxes.shape}")
+            return []
         num_boxes = pred_boxes.shape[0]
-        if logits.shape[1] == num_boxes:
-            logits = logits.T  # make it (num_boxes, num_queries)
-        # Now logits should be (num_boxes, num_queries)
-        scores = 1 / (1 + np.exp(-np.clip(logits, -50, 50)))  # sigmoid per box per query
 
-        # For each box, pick the highest scoring label
-        max_scores = np.max(scores, axis=1)
-        best_label_idx = np.argmax(scores, axis=1)
+        # 3. Ensure logits is (num_boxes, num_queries)
+        if logits.ndim != 2:
+            # if still 3D, try to take first (batch) dimension
+            if logits.ndim == 3 and logits.shape[0] == 1:
+                logits = logits[0]
+            else:
+                logger.warning(f"Cannot reduce logits shape {logits.shape} to 2D")
+                return []
 
-        valid = np.where(max_scores >= confidence_threshold)[0]
-        scale, pad_left, pad_top = transform
-        orig_h, orig_w = original_shape
-        detections = []
+        # Determine which axis is the query axis
+        if logits.shape[0] == num_boxes:
+            # already (num_boxes, num_queries)
+            pass
+        elif logits.shape[1] == num_boxes:
+            logits = logits.T  # transpose to (num_boxes, num_queries)
+        else:
+            logger.warning(
+                f"logits shape {logits.shape} does not match num_boxes {num_boxes}"
+            )
+            return []
 
-        for idx in valid:
-            conf = float(max_scores[idx])
-            label = labels[best_label_idx[idx]]
+        # 4. Compute per-box best query
+        scores = 1.0 / (1.0 + np.exp(-np.clip(logits, -50, 50)))  # (num_boxes, num_queries)
+        max_scores = scores.max(axis=1)  # (num_boxes,)
+        best_idx = scores.argmax(axis=1)  # (num_boxes,)
+        mask = max_scores >= conf_thr  # (num_boxes,)
+        if not mask.any():
+            return []
 
-            # Box in normalized [cx, cy, w, h] relative to 960x960
-            cx, cy, w, h = pred_boxes[idx]
-            x1 = (cx - w / 2) * self.image_size
-            y1 = (cy - h / 2) * self.image_size
-            x2 = (cx + w / 2) * self.image_size
-            y2 = (cy + h / 2) * self.image_size
+        # 5. Scale boxes back to original image coordinates
+        S = self.IMAGE_SIZE
+        scale, pl, pt = transform
+        oh, ow = orig_shape
+        cb = pred_boxes[mask]  # (keep, 4)   cx,cy,w,h in [0,1]
+        x1 = ((cb[:, 0] - cb[:, 2] / 2) * S - pl) / scale
+        y1 = ((cb[:, 1] - cb[:, 3] / 2) * S - pt) / scale
+        x2 = ((cb[:, 0] + cb[:, 2] / 2) * S - pl) / scale
+        y2 = ((cb[:, 1] + cb[:, 3] / 2) * S - pt) / scale
+        boxes = np.stack([
+            np.clip(x1, 0, ow), np.clip(y1, 0, oh),
+            np.clip(x2, 0, ow), np.clip(y2, 0, oh),
+        ], axis=1)
 
-            # Remove padding
-            x1 -= pad_left
-            y1 -= pad_top
-            x2 -= pad_left
-            y2 -= pad_top
+        vscores = max_scores[mask]
+        vlabels = best_idx[mask]
 
-            # Scale back to original dimensions
-            x1 /= scale
-            y1 /= scale
-            x2 /= scale
-            y2 /= scale
-
-            x1 = max(0, int(x1))
-            y1 = max(0, int(y1))
-            x2 = min(orig_w, int(x2))
-            y2 = min(orig_h, int(y2))
-
-            if x2 > x1 and y2 > y1:
-                detections.append(([x1, y1, x2, y2], label, conf))
-
-        detections.sort(key=lambda x: x[2], reverse=True)
-        logger.debug(f"Kept {len(detections)} detections")
+        detections: List[Detection] = []
+        for k in range(len(boxes)):
+            bx1, by1, bx2, by2 = boxes[k]
+            if bx2 > bx1 and by2 > by1:
+                label_idx = vlabels[k]
+                if label_idx < len(labels):
+                    detections.append(
+                        ([int(bx1), int(by1), int(bx2), int(by2)],
+                         labels[label_idx], float(vscores[k]))
+                    )
+        detections.sort(key=lambda d: d[2], reverse=True)
         return detections
 
-    def predict(self, image: np.ndarray, labels: List[str], confidence_threshold: float):
+    def _run_session(self, pixel_values: np.ndarray, ids: np.ndarray, attn_mask: np.ndarray) -> List[np.ndarray]:
+        if self._iob is not None:
+            iob = self._iob
+            iob.clear_binding_inputs()
+            iob.clear_binding_outputs()
+            if "pixel_values" in self.input_names: iob.bind_cpu_input("pixel_values", pixel_values)
+            if "input_ids" in self.input_names: iob.bind_cpu_input("input_ids", ids)
+            if "attention_mask" in self.input_names: iob.bind_cpu_input("attention_mask", attn_mask)
+            for name in self.output_names:
+                iob.bind_output(name, device_type="cuda")
+            self.session.run_with_iobinding(iob)
+            return [iob.get_outputs()[i].numpy() for i in range(len(self.output_names))]
+        else:
+            feed: Dict[str, np.ndarray] = {"pixel_values": pixel_values}
+            if "input_ids" in self.input_names: feed["input_ids"] = ids
+            if "attention_mask" in self.input_names: feed["attention_mask"] = attn_mask
+            return self.session.run(self.output_names, feed)
+
+    def predict(
+            self, image: np.ndarray, labels: List[str],
+            conf_thr: float, nms_iou: float = 0.5,
+    ) -> List[Detection]:
+        """Single joint inference with all labels, plus NMS."""
         pixel_values, transform = self.preprocess(image)
-        input_ids, attention_mask = self.tokenize_labels(labels)
+        ids, attn_mask = self._tokens(labels)
+        outputs = self._run_session(pixel_values, ids, attn_mask)
+        dets = self.postprocess(outputs, conf_thr, image.shape[:2], transform, labels)
 
-        input_feed = {"pixel_values": pixel_values}
-        if "input_ids" in self.input_names:
-            input_feed["input_ids"] = input_ids
-        if "attention_mask" in self.input_names:
-            input_feed["attention_mask"] = attention_mask
+        # simple NMS
+        if dets:
+            boxes = np.array([d[0] for d in dets], dtype=np.float32)
+            scores = np.array([d[2] for d in dets], dtype=np.float32)
+            keep = []
+            order = scores.argsort()[::-1]
+            while order.size:
+                i = order[0]
+                keep.append(i)
+                iou = box_iou_single(dets[i][0], boxes[order[1:]])
+                order = order[1:][iou <= nms_iou]
+            dets = [dets[k] for k in keep]
+            dets.sort(key=lambda d: d[2], reverse=True)
+        return dets
 
-        outputs = self.session.run(self.output_names, input_feed)
-        return self.postprocess(outputs, confidence_threshold, image.shape[:2], transform, labels)
+
+# ══════════════════════════════════════════════════════════════
+#  Thread B — async detector
+# ══════════════════════════════════════════════════════════════
+
+DetectorResult = Tuple[List[Detection], np.ndarray, float]
 
 
-def draw_detections(image: np.ndarray, detections: List, fps: float = None):
+class DetectorThread:
+    def __init__(
+            self, detector: OWLv2ONNXDetector, labels: List[str],
+            conf_thr: float, nms_iou: float,
+    ) -> None:
+        self._det = detector
+        self._labels = labels
+        self._conf_thr = conf_thr
+        self._nms_iou = nms_iou
+
+        self._pending: Optional[Tuple[np.ndarray, float]] = None
+        self._pending_lock = threading.Lock()
+        self._work_event = threading.Event()
+
+        self._result: Optional[DetectorResult] = None
+        self._result_lock = threading.Lock()
+        self._result_ready = threading.Event()
+
+        self._running = True
+        self._thread = threading.Thread(target=self._run, name="Detector", daemon=True)
+        self._thread.start()
+
+    def request(self, frame: np.ndarray, capture_ts: float) -> None:
+        with self._pending_lock:
+            self._pending = (frame.copy(), capture_ts)
+        self._work_event.set()
+
+    def get_latest(self) -> Optional[DetectorResult]:
+        if self._result_ready.is_set():
+            self._result_ready.clear()
+            with self._result_lock:
+                return self._result
+        return None
+
+    def stop(self) -> None:
+        self._running = False
+        self._work_event.set()
+
+    def _run(self) -> None:
+        logger.info("Detector thread started")
+        while self._running:
+            self._work_event.wait()
+            self._work_event.clear()
+            if not self._running:
+                break
+            with self._pending_lock:
+                work = self._pending
+                self._pending = None
+            if work is None:
+                continue
+            frame, t_capture = work
+            t0 = time.perf_counter()
+            try:
+                dets = self._det.predict(frame, self._labels, self._conf_thr, self._nms_iou)
+            except Exception as exc:
+                logger.error("Inference error: %s", exc)
+                continue
+            logger.debug("Inference %.0f ms → %d dets", (time.perf_counter() - t0) * 1000, len(dets))
+            with self._result_lock:
+                self._result = (dets, frame, t_capture)
+            self._result_ready.set()
+
+
+# ══════════════════════════════════════════════════════════════
+#  Visualisation
+# ══════════════════════════════════════════════════════════════
+
+_COL_DETECT = (0, 220, 0)
+_COL_TRACK = (0, 220, 220)
+_COL_TRIGGER = (0, 200, 255)
+
+
+def draw_detections(
+        image: np.ndarray, detections: List[Detection],
+        fps: float = 0.0, det_ms: float = 0.0,
+        source: str = "detect", trigger_reason: str = "",
+) -> np.ndarray:
+    colour = {"detect": _COL_DETECT, "track": _COL_TRACK}.get(source, _COL_TRIGGER)
     for bbox, label, conf in detections:
         x1, y1, x2, y2 = bbox
-        cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        text = f"{label}: {conf:.2f}"
-        tw, th = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)[0]
+        cv2.rectangle(image, (x1, y1), (x2, y2), colour, 2)
+        prefix = "" if source == "detect" else "~"
+        tag = f"{prefix}{label}: {conf:.2f}"
+        (tw, th), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
         cv2.rectangle(image, (x1, y1 - th - 4), (x1 + tw, y1), (255, 255, 255), -1)
-        cv2.putText(image, text, (x1, y1 - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
-    if fps is not None:
-        cv2.putText(image, f"FPS: {fps:.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        cv2.putText(image, tag, (x1, y1 - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 1)
+    status = f"FPS:{fps:.1f}  Det:{det_ms:.0f}ms"
+    if trigger_reason:
+        status += f"  [{trigger_reason}]"
+    cv2.putText(image, status, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 0), 2)
     return image
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--device", type=str, default="cpu", choices=["cpu", "cuda"])
-    parser.add_argument("--labels", type=str, default="cat", help="Comma-separated labels")
-    parser.add_argument("--confidence", type=float, default=0.05, help="Confidence threshold")
+# ══════════════════════════════════════════════════════════════
+#  Entry point
+# ══════════════════════════════════════════════════════════════
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="OWLv2 real-time detector – robust postprocessing")
+    parser.add_argument("--device", default="cpu", choices=["cpu", "cuda"])
+    parser.add_argument("--labels", default="cat")
+    parser.add_argument("--confidence", type=float, default=0.05)
     parser.add_argument("--camera", type=int, default=1)
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=720)
+    parser.add_argument("--nms-iou", type=float, default=0.5)
+    parser.add_argument("--tracker", default="CSRT", choices=["CSRT", "KCF", "MOSSE"])
+    parser.add_argument("--redetect-interval", type=float, default=8.0)
+    parser.add_argument("--fg-blob-area", type=int, default=2000)
+    parser.add_argument("--fg-overlap", type=float, default=0.15)
     args = parser.parse_args()
 
     labels = parse_labels(args.labels)
-    logger.info(f"Detecting: {labels} on {args.device}")
+    logger.info("Labels: %s | device: %s | tracker: %s", labels, args.device, args.tracker)
 
     model_dir = Path("src/owl/models") / args.device
-    model_path = model_dir / "owl_model.onnx" / "model.onnx"
+    model_path = model_dir / "owl2_model.onnx"
     if not model_path.exists():
-        alt = model_dir / "model.onnx"
+        alt = model_dir / "owl2_model.onnx"
         if alt.exists():
             model_path = alt
         else:
-            logger.error(f"Model not found at {model_path} or {alt}")
+            logger.error("Model not found")
             return 1
 
     detector = OWLv2ONNXDetector(model_path, args.device)
 
-    cap = cv2.VideoCapture(args.camera)
-    if not cap.isOpened():
-        logger.error(f"Cannot open camera {args.camera}")
-        return 1
+    # Warm‑up
+    dummy = np.zeros((args.height, args.width, 3), dtype=np.uint8)
+    try:
+        detector.predict(dummy, labels, 0.5)
+        logger.info("Warm-up complete")
+    except Exception as exc:
+        logger.warning("Warm-up failed (non-fatal): %s", exc)
 
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
+    camera = CameraCapture(args.camera, args.width, args.height)
+    pool = TrackerPool(args.tracker)
+    watcher = SceneWatcher(
+        redetect_interval=args.redetect_interval,
+        fg_blob_min_area=args.fg_blob_area,
+        fg_overlap_thr=args.fg_overlap,
+    )
+    det_thread = DetectorThread(detector, labels, args.confidence, args.nms_iou)
 
-    frame_count = 0
-    start_time = time.time()
+    current_detections: List[Detection] = []
+    live_boxes: List[List[int]] = []
+    display_source = "detect"
+    trigger_reason = "startup"
     fps = 0.0
+    last_det_ms = 0.0
+    frame_count = 0
+    fps_ts = time.perf_counter()
+    detection_in_flight = False
+    det_t0 = 0.0
+
+    first_result = camera.grab()
+    while first_result is None:
+        time.sleep(0.01)
+        first_result = camera.grab()
+    first_frame, first_ts = first_result
+    det_thread.request(first_frame, first_ts)
+    det_t0 = time.perf_counter()
+    detection_in_flight = True
+
+    logger.info("Display loop started — press Q to quit")
 
     while True:
-        ret, frame = cap.read()
-        if not ret:
+        grab_result = camera.grab()
+        if grab_result is None:
+            time.sleep(0.005)
             continue
+        frame, frame_ts = grab_result
 
-        detections = detector.predict(frame, labels, args.confidence)
+        result = det_thread.get_latest()
+        if result is not None:
+            last_det_ms = (time.perf_counter() - det_t0) * 1000
+            new_dets, seed_frame, t_capture = result
+            pool.reset(seed_frame, new_dets)
+            replay_frames = camera.frames_since(t_capture)
+            if replay_frames:
+                pool.replay(replay_frames)
+                logger.debug("Replayed %d frames", len(replay_frames))
+            current_detections = new_dets
+            live_boxes = [d[0] for d in new_dets]
+            display_source = "detect"
+            detection_in_flight = False
+
+        if pool._trackers:
+            tracked_dets, any_lost = pool.update(frame)
+            if tracked_dets:
+                current_detections = tracked_dets
+                live_boxes = [d[0] for d in tracked_dets]
+                if display_source != "detect":
+                    display_source = "track"
+            elif any_lost:
+                current_detections = []
+                live_boxes = []
+        else:
+            any_lost = False
+
+        if not detection_in_flight:
+            should, reason = watcher.check(frame, any_lost, live_boxes)
+            if should:
+                trigger_reason = reason
+                display_source = "trigger"
+                det_thread.request(frame, frame_ts)
+                det_t0 = time.perf_counter()
+                detection_in_flight = True
+                logger.debug("Re-detect triggered: %s", reason)
 
         frame_count += 1
-        if time.time() - start_time >= 1.0:
-            fps = frame_count / (time.time() - start_time)
+        now = time.perf_counter()
+        if now - fps_ts >= 1.0:
+            fps = frame_count / (now - fps_ts)
             frame_count = 0
-            start_time = time.time()
+            fps_ts = now
 
-        out_frame = draw_detections(frame.copy(), detections, fps)
-        cv2.imshow("OWLv2 Detection", out_frame)
+        out = draw_detections(
+            frame, current_detections, fps=fps, det_ms=last_det_ms,
+            source=display_source,
+            trigger_reason=trigger_reason if detection_in_flight else "",
+        )
+        cv2.imshow("OWLv2 Detection", out)
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
 
-    cap.release()
+    det_thread.stop()
+    camera.release()
     cv2.destroyAllWindows()
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())
