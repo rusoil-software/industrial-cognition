@@ -22,7 +22,6 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
-from optimum.exporters.onnx import onnx_export_from_model
 from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection, Owlv2ForObjectDetection
 
 logger = logging.getLogger(__name__)
@@ -42,7 +41,7 @@ class OWL2ModelExporter:
     def __init__(
             self,
             model_name: str = "owlv2-base",
-            device: str = "cpu",
+            device: str = torch.device("cuda" if torch.cuda.is_available() else "cpu"),
             cache_dir: Optional[Path] = None,
     ):
         """
@@ -77,6 +76,7 @@ class OWL2ModelExporter:
             self.model = Owlv2ForObjectDetection.from_pretrained(
                 self.model_id,
                 cache_dir=str(self.cache_dir),
+                torch_dtype=torch.float16,
             )
             self.model.to(self.device)
             self.model.eval()
@@ -88,7 +88,7 @@ class OWL2ModelExporter:
     def export_to_onnx(
             self,
             output_path: Path,
-            opset_version: int = 14,
+            opset_version: int = 18,
             optimize_model: bool = True,
             use_external_data_format: bool = False,
     ) -> None:
@@ -97,7 +97,7 @@ class OWL2ModelExporter:
 
         Args:
             output_path: Where to save the .onnx file
-            opset_version: ONNX opset version (14 is widely supported)
+            opset_version: ONNX opset version (18 is widely supported)
             optimize_model: Whether to optimize the ONNX model after export
             use_external_data_format: For large models, split weights into external files
 
@@ -115,30 +115,47 @@ class OWL2ModelExporter:
         # Create dummy inputs matching the model's expected shape
         dummy_inputs = self._create_dummy_inputs()
 
+        class _ExportWrapper(torch.nn.Module):
+            def __init__(self, model): super().__init__(); self.m = model
+
+            def forward(self, pixel_values, input_ids, attention_mask):
+                out = self.m(pixel_values=pixel_values,
+                             input_ids=input_ids,
+                             attention_mask=attention_mask)
+                return out.logits, out.pred_boxes
+
+        wrapped = _ExportWrapper(self.model).eval()
+
         try:
-            onnx_export_from_model(
-                self.model,
-                str(output_path)
-            )
-            # torch.onnx.export(
+            # onnx_export_from_model(
             #     self.model,
-            #     dummy_inputs,
             #     str(output_path),
-            #     input_names=["pixel_values", "input_ids", "attention_mask"],
-            #     output_names=["logits", "pred_boxes"],
-            #     opset_version=opset_version,
-            #     do_constant_folding=True,
-            #     verbose=False,
-            #     dynamo=False,
-            #     # use_external_data_format=use_external_data_format,
-            #     dynamic_axes={
-            #         "pixel_values": {0: "batch_size"},
-            #         "input_ids": {0: "batch_size"},
-            #         "attention_mask": {0: "batch_size"},
-            #         "logits": {0: "batch_size"},
-            #         "pred_boxes": {0: "batch_size"},
-            #     },
+            #     monolith=True,
+            #     preprocessors=[self.processor],
+            #     slim=True,
+            #     use_subprocess=True,
+            #     opt_level=opset_version,
+            #     device=self.device,
+            #     no_dynamic_axes=True,
+            #     dtype="fp32",            # ← force clean fp32 trace, cast happens after
             # )
+            torch.onnx.export(
+                wrapped,
+                dummy_inputs,
+                str(output_path),
+                input_names=["pixel_values", "input_ids", "attention_mask"],
+                output_names=["logits", "pred_boxes"],
+                opset_version=opset_version,
+                do_constant_folding=True,
+                verbose=False,
+                dynamic_axes={
+                    "pixel_values": {0: "batch_size"},
+                    "input_ids": {0: "batch_size"},
+                    "attention_mask": {0: "batch_size"},
+                    "logits": {0: "batch_size"},
+                    "pred_boxes": {0: "batch_size"},
+                },
+            )
             logger.info("ONNX export completed: %s", output_path)
 
         except Exception as exc:
@@ -154,7 +171,7 @@ class OWL2ModelExporter:
         Dimensions should match what OWL 2 expects.
         """
         batch_size = 1
-        image_size = 768  # Standard for OWL v2
+        image_size = 960  # Standard for OWL v2
         seq_length = 16  # Max query tokens
 
         # Dummy image: [batch, channels, height, width]
@@ -182,39 +199,50 @@ class OWL2ModelExporter:
         return pixel_values, input_ids, attention_mask
 
     @staticmethod
-    def _optimize_onnx(onnx_path: Path) -> None:
-        """
-        Optimize the ONNX model using onnxruntime's transformer optimization tools.
-        Reduces model size and speeds up inference.
-        """
+    def _optimize_onnx(
+            onnx_path: Path,
+            opset_version: int = 18
+    ) -> None:
         try:
+            import onnx
             from onnxruntime.transformers import optimizer
             from onnxruntime.transformers.onnx_model_bert import BertOptimizationOptions
+            from onnxruntime.transformers.float16 import convert_float_to_float16
 
-            logger.info("Optimizing ONNX model: %s", onnx_path)
+            logger.info("Converting raw ONNX proto to fp16: %s", onnx_path)
+            model_proto = onnx.load(str(onnx_path))
+            model_proto = convert_float_to_float16(
+                model_proto,
+                keep_io_types=True,  # keep pixel_values input as fp32 so the
+                # preprocessor doesn't need to change
+                disable_shape_infer=False,
+            )
+            fp16_path = onnx_path.parent / f"{onnx_path.stem}_fp16.onnx"
+            onnx.save(model_proto, str(fp16_path))
+            logger.info("fp16 proto saved: %s", fp16_path)
 
+            logger.info("Optimising fp16 model...")
             opt_options = BertOptimizationOptions("bert")
             opt_options.enable_all()
 
             opt_model = optimizer.optimize_model(
-                str(onnx_path),
+                str(fp16_path),
                 model_type="bert",
                 num_heads=12,
                 hidden_size=768,
+                use_gpu=True,
+                opt_level=opset_version,
+                only_onnxruntime=True,
                 optimization_options=opt_options,
             )
-
             optimized_path = onnx_path.parent / f"{onnx_path.stem}_optimized.onnx"
             opt_model.save_model_to_file(str(optimized_path))
-            logger.info("Optimized model saved: %s", optimized_path)
+            logger.info("Optimised fp16 model saved: %s", optimized_path)
 
         except ImportError:
-            logger.warning(
-                "onnxruntime[transformers] not installed. Skipping optimization. "
-                "Install with: pip install onnxruntime[transformers]"
-            )
+            logger.warning("onnx or onnxruntime[transformers] not installed. Skipping.")
         except Exception as exc:
-            logger.warning("ONNX optimization failed (non-fatal): %s", exc)
+            logger.warning("ONNX optimisation failed (non-fatal): %s", exc)
 
 
 class OWL2ModelDownloader:

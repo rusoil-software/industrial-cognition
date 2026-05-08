@@ -31,6 +31,14 @@ import os
 import sys
 from pathlib import Path
 
+import torch
+
+try:
+    print(f"Cuda available? {torch.cuda.is_available()}", end="\n\n")  # Should output: True
+    print(f"PyTorch compiled against cuDNN v{torch.version.cuda}")  # Should output your CUDA version
+except ImportError as e:
+    print("Cuda is unavailable for this environment")
+
 # Add the project root to sys.path to make 'src' importable
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', ))
 if project_root not in sys.path:
@@ -60,13 +68,13 @@ def main():
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("models/owl2_model.onnx"),
-        help="Output path for ONNX model (default: models/owl2_model.onnx)",
+        default=Path("models/owl_model.onnx"),
+        help="Output path for ONNX model (default: models/owl_model.onnx)",
     )
     parser.add_argument(
         "--device",
         type=str,
-        default="cpu",
+        default=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
         choices=["cpu", "cuda"],
         help="Device to use for export (default: cpu)",
     )

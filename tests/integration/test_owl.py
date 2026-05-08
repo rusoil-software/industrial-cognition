@@ -33,29 +33,24 @@ Run with:
   pytest tests/inference/test_integration.py -v -s \
     --model-path models/owl2_model.onnx
 """
+import asyncio
 import io
 import logging
 import os
 import sys
 from dataclasses import dataclass
+from multiprocessing import Process
 from pathlib import Path
-from typing import AsyncGenerator
 from typing import NamedTuple
 
 import numpy as np
 import pytest
 import requests
 from PIL import Image
-from httpx import ASGITransport, AsyncClient
-import asyncio
+from httpx import AsyncClient
 from transformers import Owlv2Processor
-from multiprocessing import Process
-import uvicorn
 from uvicorn.config import Config
 from uvicorn.server import Server
-
-import sys
-import os
 
 # Add the project root to sys.path to make 'src' importable
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -453,7 +448,7 @@ class TestServiceIntegration:
         from src.owl.inference.service import OWL2InferenceService
 
         service = OWL2InferenceService(
-            model_path=Path("src") / "owl" / "models" / "owl_model.onnx" / "model.onnx",
+            model_path=Path("src") / "owl" / "models" / "cuda" / "owl_model.onnx",
             execution_provider="CPUExecutionProvider",
         )
         # Inject the real session

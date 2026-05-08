@@ -18,13 +18,19 @@
 
 from pathlib import Path
 
+import onnxruntime as ort
 from pydantic import ConfigDict
 from pydantic_settings import BaseSettings
 
 
+def get_provider(device: str = "cuda") -> str:
+    if device == "cuda" and "CUDAExecutionProvider" in ort.get_available_providers():
+        return "CUDAExecutionProvider"
+    return "CPUExecutionProvider"
+
 class InferenceConfig(BaseSettings):
-    OWL2_MODEL_PATH: Path = Path("src") / "owl" / "models" / "owl_model.onnx" / "model.onnx"
-    OWL2_EXECUTION_PROVIDER: str = "CPUExecutionProvider"
+    OWL2_MODEL_PATH: Path = Path("src") / "owl" / "models" / "cuda" / "owl2_model.onnx"
+    OWL2_EXECUTION_PROVIDER: str = get_provider()
     OWL2_MAX_BATCH_SIZE: int = 32
 
     model_config = ConfigDict()

@@ -41,14 +41,14 @@ To download and export the owl-2 use the following CLI script:
 # Export owlv2-base to ONNX with optimization
 python scripts/export_model.py \
   --model owlv2-base \
-  --output src/owl/models/cuda/owl2_model.onnx \
+  --output src/owl/models/cuda/owl_model.onnx \
   --device cuda \
   --optimize
 
 # Export owlv2-large without optimization
 python scripts/export_model.py \
   --model owlv2-large \
-  --output src/owl/models/cpu/owl2_large.onnx \
+  --output src/owl/models/cpu/owl_large.onnx \
   --device cpu \
   --no-optimize         
 ```
