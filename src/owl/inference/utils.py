@@ -20,6 +20,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+import tensorrt as trt
 import torch
 import torch.nn as nn
 from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection, Owlv2ForObjectDetection
@@ -313,3 +314,27 @@ def export_owl2_to_onnx(
 
     logger.info("Export complete. Model saved to: %s", output_path)
     return output_path
+
+
+def export_to_trt(onnx_path: Path, trt_path: Path, fp16: bool = True):
+    logger = trt.Logger(trt.Logger.WARNING)
+    builder = trt.Builder(logger)
+    network = builder.create_network(
+        1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
+    )
+    parser = trt.OnnxParser(network, logger)
+
+    with open(onnx_path, "rb") as f:
+        if not parser.parse(f.read()):
+            for i in range(parser.num_errors):
+                print(parser.get_error(i))
+            raise RuntimeError("TRT ONNX parse failed")
+
+    config = builder.create_builder_config()
+    config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 4 * 1024 ** 3)
+    if fp16:
+        config.set_flag(trt.BuilderFlag.FP16)
+
+    engine_bytes = builder.build_serialized_network(network, config)
+    with open(trt_path, "wb") as f:
+        f.write(engine_bytes)
