@@ -9,8 +9,8 @@ src/owl/models/**
 
 # IDE
 .vscode/
-.idea/**
-.gigaide/**
+.idea/
+.gigaide/
 *.swp
 *.swo
 
