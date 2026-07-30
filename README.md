@@ -17,7 +17,7 @@
   <p align="center">
     A Project Blueprint for Autonomous Vision and Robotics
     <br />
-    <a href="https://github.com/rusoil-software/industrial-cognition"><strong>Explore the docs »</strong></a>
+    <a href="https://github.com/rusoil-software/industrial-cognition/wiki"><strong>Explore the docs »</strong></a>
     <br />
     <br />
     <a href="https://github.com/rusoil-software/industrial-cognition/issues">Report Bug</a>
@@ -57,7 +57,7 @@
 <!-- ABOUT THE PROJECT -->
 ## About The Project
 
-[![Product Name Screen Shot][product-screenshot]](https://github.com/rusoil-software/industrial-cognition/tree/master/images/screenshot.png)
+![MVM Dashboard view](https://github.com/rusoil-software/industrial-cognition/tree/master/images/screenshot.png "MVM Dashboard")
 
 ### Project Overview
 
@@ -70,7 +70,7 @@ It's goal is to create an autonomous, real-time system that uses computer vision
 
 The system adheres to a strict **Layered Architecture** to maximize resilience and maintainability.
 
-[![Product Name Screen Shot][product-architecture]](https://github.com/rusoil-software/industrial-cognition/tree/master/images/architecture.png)
+![This picture contains the Machine Vision Module internal structure which is a Kubernetes‑based video analytics pipeline with eight layers: Cameras – Six IP cameras stream 1080p H.264 video over RTSP. FFMPEG Pods – One pod per camera decodes the stream into raw frames. FastAPI Service – A load‑balanced API validates incoming frames and publishes work messages. MinIO Storage – Three‑node S3‑compatible cluster storing frames and inference results. RabbitMQ – Three‑node message broker with priority queues, results queue, and dead‑letter queue. Inference Workers – Four GPU pods running ONNX Runtime, consuming messages and writing results. Results Workers – Two CPU pods performing tracking, post‑processing, and alerting. Observability – Prometheus, Loki, and Grafana for metrics, logs, and dashboards. Supporting components include Kubernetes control‑plane services, CPU and GPU node pools, persistent volumes, autoscaling rules based on CPU/GPU load and queue depth, and network policies restricting traffic to RTSP, AMQP, and HTTPS.](https://github.com/rusoil-software/industrial-cognition/tree/master/images/architecture.png "MVM Architecture")
 
 **Flow:** Data flows from the physical world $\rightarrow$ Camera Service $\rightarrow$ Vision Service $\rightarrow$ Robot Interface $\rightarrow$ Physical Robot.
 
