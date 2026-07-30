@@ -20,8 +20,8 @@ import subprocess
 import subprocess.exceptions
 import time
 from typing import List, Dict, Any, Optional
-from .constants import DEFAULT_FPS, DEFAULT_WIDTH, DEFAULT_HEIGHT, STREAM_CODEC, STREAM_PIPELINE_BASE
-from .schemas import CameraConfig, FrameMetadata, DetectionResult
+from constants import DEFAULT_FPS, DEFAULT_WIDTH, DEFAULT_HEIGHT, STREAM_CODEC, STREAM_PIPELINE_BASE
+from schemas import CameraConfig, FrameMetadata, DetectionResult
 
 class CameraService:
     """
