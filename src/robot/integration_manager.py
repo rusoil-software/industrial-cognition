@@ -18,7 +18,7 @@
 
 import time
 import json
-from typing import Optional
+from typing import Optional, Dict, Any
 from ..schemas import DetectionResult
 from ..robot.service import ModbusService
 from ..vision.schemas import VisionOutputPayload
