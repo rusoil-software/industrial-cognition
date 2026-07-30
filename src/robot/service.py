@@ -19,10 +19,10 @@
 import time
 import serial
 from typing import List, Optional
-from ..camera.schemas import DetectionResult # Reusing schemas for consistency
-from ..constants import MODBUS_PROTOCOL, MODBUS_BAUD_RATE, MODBUS_INTERFACE
-from ..schemas import DetectionTaskPayload # Using task payload structure for simplicity
-from ..utils.exceptions import ModbusError # Assume a custom exception exists
+from src.camera.schemas import DetectionResult # Reusing schemas for consistency
+from src.robot.constants import MODBUS_PROTOCOL, MODBUS_BAUD_RATE, MODBUS_INTERFACE
+from src.vision.schemas import DetectionTaskPayload # Using task payload structure for simplicity
+from src.utils.exceptions import ModbusError # Assume a custom exception exists
 
 class ModbusService:
     """
