@@ -18,7 +18,7 @@
 
 import time
 import serial
-from typing import List
+from typing import List, Optional
 from ..camera.schemas import DetectionResult # Reusing schemas for consistency
 from ..constants import MODBUS_PROTOCOL, MODBUS_BAUD_RATE, MODBUS_INTERFACE
 from ..schemas import DetectionTaskPayload # Using task payload structure for simplicity
@@ -38,7 +38,7 @@ class ModbusService:
         """Establishes the serial connection to the robot controller."""
         try:
             # Use serial.Serial for physical bus connection
-            self.serial_connection = serial.Serial(self.port, baudrate, timeout=1)
+            self.serial_connection = serial.Serial(self.port, self.baudrate, timeout=1)
             print(f"Successfully connected to Modbus port {self.port}.")
             return True
         except serial.SerialException as e:
