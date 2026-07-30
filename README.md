@@ -92,7 +92,7 @@ Here are main layers of the MVM (Machine Vision Module):
 * **Streaming:** All real-time video streams are managed via **FFmpeg/GStreamer** pipelines to ensure performance consistency.
 * **Deployment:** containerized and orchestrated using **Kubernetes (K8s)** for high availability and horizontal scaling.
 
-## *Core Functionality & Goals
+## Core Functionality & Goals
 
 * **Goal:** To autonomously detect, locate, and classify specific parts in an industrial setting with extreme
   reliability.
