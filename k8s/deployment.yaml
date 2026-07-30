@@ -1,108 +1,43 @@
-# k8s/deployment.yaml
-
+# --- K8s Manifests for Industrial Cognition ---
+# Service for the main API Gateway (FastAPI)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: owl2-inference
-  namespace: ml-services
+  name: api-gateway
+  labels:
+    app: api-gateway
 spec:
-  replicas: 3
+  replicas: 2
   selector:
     matchLabels:
-      app: owl2-inference
+      app: api-gateway
   template:
     metadata:
       labels:
-        app: owl2-inference
-        version: v1
+        app: api-gateway
     spec:
-      # Pod security context
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-        fsGroup: 1000
-
       containers:
-        - name: inference
-          image: registry.example.com/owl2-inference:latest
-          imagePullPolicy: IfNotPresent
-
-          ports:
-            - name: http
-              containerPort: 8000
-              protocol: TCP
-
-          env:
-            - name: ENVIRONMENT
-              value: "production"
-            - name: OWL2_EXECUTION_PROVIDER
-              value: "CPUExecutionProvider"
-
-          # Container security context
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop:
-                - ALL
-
-          # Resource requests and limits
-          resources:
-            requests:
-              cpu: "1"
-              memory: "2Gi"
-            limits:
-              cpu: "2"
-              memory: "4Gi"
-
-          # Liveness and readiness probes
-          livenessProbe:
-            httpGet:
-              path: /api/v1/inference/owl2/health
-              port: http
-            initialDelaySeconds: 40
-            periodSeconds: 30
-            timeoutSeconds: 10
-            failureThreshold: 3
-
-          readinessProbe:
-            httpGet:
-              path: /api/v1/inference/owl2/health
-              port: http
-            initialDelaySeconds: 20
-            periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 2
-
-          # Volume mounts
-          volumeMounts:
-            - name: models
-              mountPath: /app/models
-              readOnly: true
-            - name: tmp
-              mountPath: /tmp
-            - name: cache
-              mountPath: /home/appuser/.cache
-
-      volumes:
-        - name: models
-          configMap:
-            name: owl2-models
-        - name: tmp
-          emptyDir: { }
-        - name: cache
-          emptyDir: { }
-
-      # Pod disruption budget for high availability
-      affinity:
-        podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              podAffinityTerm:
-                labelSelector:
-                  matchExpressions:
-                    - key: app
-                      operator: In
-                      values:
-                        - owl2-inference
-                topologyKey: kubernetes.io/hostname
+      - name: fastapi-app
+        image: your-registry/industrial-cognition-api:latest # Placeholder image
+        ports:
+        - containerPort: 8000
+          name: http
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: postgres-password
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway-service
+spec:
+  selector:
+    app: api-gateway
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8000
+  type: LoadBalancer

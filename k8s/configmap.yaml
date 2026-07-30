@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  labels:
+    app: api-gateway
+data:
+  # Default configuration parameters (e.g., camera connection defaults)
+  CAMERA_IP: "192.168.1.10"
+  CAMERA_PORT: "556"
+  DEFAULT_FPS: "30"
+  SYSTEM_STATUS_MESSAGE: "System Operational"
