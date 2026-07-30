@@ -16,16 +16,19 @@ The primary function of the system — the machine vision module — is a combin
 ## Technical Architecture
 
 ### Backend
+
 - **Framework**: FastAPI (Python)
 - **Purpose**: Provides a web control panel and REST/websocket API for system monitoring and integration.
 - **Real-Time Communication**: Utilizes WebSocket connections to push object detection results to connected clients without requiring repeated polling requests.
 
 ### Vision Processing
+
 - **Library**: OpenCV (direct integration)
 - **Functionality**: Real-time image analysis to identify objects based on predefined parameters such as size thresholds, shape, and contrast.
 - **Processing Target**: Runs on a high-performance industrial computer capable of handling continuous video input and parallel computation.
 
 ### Data Management
+
 - **Database Integration**: Detected object coordinates and metadata are saved into a persistent database for logging, analytics, and system recovery.
 - **Asynchronous Design**: The entire pipeline — from image capture to database write and WebSocket broadcast — is implemented asynchronously to ensure low latency and high throughput.
 
