@@ -15,8 +15,7 @@ development. The vision follows the KISS principle while ensuring a solid founda
     - Alembic for database migrations
 - **Containerization**: Docker 20.10+
     - Ensures consistent deployment across environments
-- **Camera Interface**: Native SDK integration with industrial camera APIs
-    - Direct communication with camera hardware for optimal performance
+- **Communication Protocol**: All robotic communication must use **binary Modbus over RS-485** physical layer. This supersedes all previous protocols. Data exchange must strictly adhere to Modbus RTU framing, utilizing specified function codes for read/write operations.
 
 ## Development Approach
 
