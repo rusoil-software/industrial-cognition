@@ -19,6 +19,7 @@
 from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
+from ..camera.schemas import DetectionResult, FrameMetadata
 from .constants import MIN_CONFIDENCE_THRESHOLD
 
 class DetectionTaskPayload(BaseModel):
