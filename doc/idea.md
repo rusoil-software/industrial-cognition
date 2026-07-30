@@ -10,7 +10,7 @@ The primary function of the system — the machine vision module — is a combin
 
 - Captures images via an industrial camera mounted above the robot's working area (e.g., a robotic arm).
 - Processes the video stream in real time using OpenCV algorithms for object detection.
-- Determines precise coordinates of objects (metal sheets, parts, debris) on the captured images.
+- Determines precise coordinates of objects (metal sheets, parts, debris) on the captured images and communicates these coordinates to the **robot controller via Modbus/RS-485** communication protocol.
 - Exposes this spatial data to other robotic systems through a real-time, asynchronous communication channel.
 
 ## Technical Architecture
