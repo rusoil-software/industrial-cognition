@@ -20,7 +20,7 @@ import time
 import serial
 from typing import List, Optional
 from src.camera.schemas import DetectionResult # Reusing schemas for consistency
-from src.robot.constants import MODBUS_PROTOCOL, MODBUS_BAUD_RATE, MODBUS_INTERFACE
+from src.robot.constraints import MODBUS_PROTOCOL, MODBUS_BAUD_RATE, MODBUS_INTERFACE
 from src.vision.schemas import DetectionTaskPayload # Using task payload structure for simplicity
 from src.utils.exceptions import ModbusError # Assume a custom exception exists
 
@@ -29,7 +29,7 @@ class ModbusService:
     Manages communication with the physical robot controller via Modbus/RS-485.
     This service abstracts the physical communication layer.
     """
-    def __init__(self, port: str, baudrate: str):
+    def __init__(self, port: str, baudrate: int = MODBUS_BAUD_RATE):
         self.port = port
         self.baudrate = baudrate
         self.serial_connection = None

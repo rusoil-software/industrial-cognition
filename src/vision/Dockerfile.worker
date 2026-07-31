@@ -16,25 +16,25 @@
 # date   : 2026-Jun-31
 # ==============================================================================
 
-# Dockerfile for the FastAPI API Gateway (api_gateway)
-# This image runs the main API server, orchestrating camera input,
-# handling web/WebSocket connections, and managing the overall flow.
+# Dockerfile for the Celery Worker Container (vision worker)
+# This image is optimized to run the heavy computation logic, consuming messages
+# from RabbitMQ and writing results to MinIO/Redis.
 
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Copy requirements files first for build caching
-COPY requirements/api.txt requirements/api.txt
+# Copy requirements files first
+COPY requirements/vision.txt requirements/vision.txt
 
-# Install core dependencies
-RUN pip install --no-cache-dir -r requirements/api.txt
+# Install dependencies
+RUN pip install --no-cache-dir -r requirements/vision.txt
 
 # Copy the entire source code structure
 COPY src/ ./src/
 
-# Expose the port used by FastAPI
-EXPOSE 8000
+# Expose the internal port if needed, but generally, workers listen on broker ports.
+# We don't need to expose a port here as we communicate via the network, not HTTP.
 
-# Command to run the API when the container starts
-CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Entrypoint will be managed by the celery command run via docker-compose/K8s
+CMD ["celery", "-A", "src.tasks.celery", "worker", "-l", "info"]

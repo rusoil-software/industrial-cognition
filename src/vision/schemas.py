@@ -19,8 +19,8 @@
 from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
-from ..camera.schemas import DetectionResult, FrameMetadata
-from .constants import MIN_CONFIDENCE_THRESHOLD
+from src.camera.schemas import DetectionResult, FrameMetadata
+from src.vision.constants import MIN_CONFIDENCE_THRESHOLD
 
 class DetectionTaskPayload(BaseModel):
     """Payload passed to the Vision Service from the Camera Service."""

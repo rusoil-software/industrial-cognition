@@ -19,15 +19,16 @@
 # Main Application Entry Point (FastAPI App)
 # This file orchestrates the Camera, Vision, and Robot modules.
 
+import time
+import datetime 
 from typing import Optional
 import asyncio
-import asyncio.gather
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from src.camera.service import CameraService
 from src.vision.service import VisionService, DetectionTaskPayload
 from src.robot.service import ModbusService
 from src.robot.integration_manager import RobotCommandManager
-from src.vision.schemas import CameraConfig, StreamingPayload
+from src.camera.schemas import CameraConfig, StreamingPayload
 from src.camera.schemas import DetectionResult, FrameMetadata
 from src.camera.constants import DEFAULT_FPS
 
@@ -95,7 +96,10 @@ async def websocket_endpoint(websocket: WebSocket):
             # 1. Simulate reading raw data chunk from the background FFmpeg process
             # This simulates the CameraService picking up a chunk of raw bytes.
             mock_raw_bytes = b'\xde\xad\xbe\xef' * 100 # Mock binary data
-            mock_meta = FrameMetadata(camera_id="MAIN_CAM_01", frame_number=int(time.time()*1000), timestamp=datetime.utcnow())
+            mock_meta = FrameMetadata(
+                camera_id="MAIN_CAM_01",
+                frame_number=int(time.time()*1000),
+                timestamp=datetime.datetime.now(datetime.timezone.utc))
 
             # 2. Hand-off to Vision Service (Core Logic)
             detection_payload = DetectionTaskPayload(

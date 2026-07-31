@@ -13,10 +13,5 @@
 # limitations under the License.
 #
 # author : Konstantin Ustiuzhanin
-# date   : 2026-Jun-30
+# date   : 2026-Jun-31
 # ==============================================================================
-
-# Protocol Constants
-MODBUS_PROTOCOL: str = "Modbus RTU"
-MODBUS_BAUD_RATE: int = 9600
-MODBUS_INTERFACE: str = "/dev/ttyUSB0" # Placeholder for RS-485 serial port

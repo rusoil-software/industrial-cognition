@@ -19,6 +19,8 @@
 # Vision Constants & Configurations
 # Defines parameters specific to the object detection models (OWLv2, etc.)
 
+from typing import Dict
+
 # Model Constants
 MODEL_NAME: str = "owlv2-optimized"
 MODEL_VERSION: str = "v3.1.0-gpu"

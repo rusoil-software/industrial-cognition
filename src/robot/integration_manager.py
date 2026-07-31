@@ -19,9 +19,9 @@
 import time
 import json
 from typing import Optional, Dict, Any
-from ..schemas import DetectionResult
-from ..robot.service import ModbusService
-from ..vision.schemas import VisionOutputPayload
+from src.camera.schemas import DetectionResult
+from src.robot.service import ModbusService
+from src.vision.schemas import VisionOutputPayload
 
 class RobotCommandManager:
     """
