@@ -1,0 +1,107 @@
+# Robot Interface Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: industrial-cognition-robot
+  labels:
+    app: industrial-cognition
+    component: robot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: industrial-cognition
+      component: robot
+  template:
+    metadata:
+      labels:
+        app: industrial-cognition
+        component: robot
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+    spec:
+      containers:
+      - name: robot
+        image: industrial-cognition/robot:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          name: http
+          protocol: TCP
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: industrial-cognition-config
+              key: DATABASE_URL
+        - name: RABBITMQ_URL
+          valueFrom:
+            configMapKeyRef:
+              name: industrial-cognition-config
+              key: RABBITMQ_URL
+        - name: MODBUS_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: industrial-cognition-config
+              key: MODBUS_HOST
+        - name: MODBUS_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: industrial-cognition-config
+              key: MODBUS_PORT
+        - name: MODBUS_SLAVE_ID
+          valueFrom:
+            configMapKeyRef:
+              name: industrial-cognition-config
+              key: MODBUS_SLAVE_ID
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: industrial-cognition-config
+              key: LOG_LEVEL
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        volumeMounts:
+        - name: config
+          mountPath: /app/config
+          readOnly: true
+      volumes:
+      - name: config
+        configMap:
+          name: industrial-cognition-config
+---
+# Robot Interface Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: industrial-cognition-robot
+  labels:
+    app: industrial-cognition
+    component: robot
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 8000
+    name: http
+  selector:
+    app: industrial-cognition
+    component: robot

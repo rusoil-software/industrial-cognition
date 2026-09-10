@@ -1,0 +1,117 @@
+# RabbitMQ Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: industrial-cognition-rabbitmq
+  labels:
+    app: industrial-cognition
+    component: rabbitmq
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: industrial-cognition
+      component: rabbitmq
+  template:
+    metadata:
+      labels:
+        app: industrial-cognition
+        component: rabbitmq
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "15691"
+    spec:
+      containers:
+      - name: rabbitmq
+        image: rabbitmq:3-management
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 5672
+          name: amqp
+          protocol: TCP
+        - containerPort: 15672
+          name: management
+          protocol: TCP
+        - containerPort: 4369
+          name: epmd
+          protocol: UDP
+        env:
+        - name: RABBITMQ_DEFAULT_USER
+          valueFrom:
+            secretKeyRef:
+              name: industrial-cognition-secrets
+              key: RABBITMQ_DEFAULT_USER
+        - name: RABBITMQ_DEFAULT_PASS
+          valueFrom:
+            secretKeyRef:
+              name: industrial-cognition-secrets
+              key: RABBITMQ_DEFAULT_PASS
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "200m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /api/health-ready
+            port: 15672
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /api/health-ready
+            port: 15672
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        volumeMounts:
+        - name: config
+          mountPath: /etc/rabbitmq
+          readOnly: true
+        - name: data
+          mountPath: /var/lib/rabbitmq
+          readOnly: false
+      volumes:
+      - name: config
+        configMap:
+          name: industrial-cognition-config
+      - name: data
+        persistentVolumeClaim:
+          claimName: industrial-cognition-rabbitmq-data
+---
+# RabbitMQ Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: industrial-cognition-rabbitmq
+  labels:
+    app: industrial-cognition
+    component: rabbitmq
+spec:
+  type: ClusterIP
+  ports:
+  - port: 5672
+    targetPort: 5672
+    name: amqp
+  - port: 15672
+    targetPort: 15672
+    name: management
+  - port: 4369
+    targetPort: 4369
+    name: epmd
+  selector:
+    app: industrial-cognition
+    component: rabbitmq
+---
+# RabbitMQ Persistent Volume Claim
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: industrial-cognition-rabbitmq-data
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi

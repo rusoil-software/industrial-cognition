@@ -1,0 +1,119 @@
+# API Service Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: industrial-cognition-api
+  labels:
+    app: industrial-cognition
+    component: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: industrial-cognition
+      component: api
+  template:
+    metadata:
+      labels:
+        app: industrial-cognition
+        component: api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+    spec:
+      containers:
+      - name: api
+        image: industrial-cognition/api:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          name: http
+          protocol: TCP
+        - containerPort: 8001
+          name: websocket
+          protocol: TCP
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: industrial-cognition-config
+              key: DATABASE_URL
+        - name: RABBITMQ_URL
+          valueFrom:
+            configMapKeyRef:
+              name: industrial-cognition-config
+              key: RABBITMQ_URL
+        - name: MINIO_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: industrial-cognition-config
+              key: MINIO_ENDPOINT
+        - name: MINIO_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: industrial-cognition-secrets
+              key: MINIO_ACCESS_KEY
+        - name: MINIO_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: industrial-cognition-secrets
+              key: MINIO_SECRET_KEY
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: industrial-cognition-config
+              key: LOG_LEVEL
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        volumeMounts:
+        - name: config
+          mountPath: /app/config
+          readOnly: true
+        - name: secrets
+          mountPath: /etc/secrets
+          readOnly: true
+      volumes:
+      - name: config
+        configMap:
+          name: industrial-cognition-config
+      - name: secrets
+        secret:
+          secretName: industrial-cognition-secrets
+---
+# API Service Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: industrial-cognition-api
+  labels:
+    app: industrial-cognition
+    component: api
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 8000
+    name: http
+  - port: 8080
+    targetPort: 8001
+    name: websocket
+  selector:
+    app: industrial-cognition
+    component: api

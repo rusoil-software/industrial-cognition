@@ -1,0 +1,105 @@
+# Redis Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: industrial-cognition-redis
+  labels:
+    app: industrial-cognition
+    component: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: industrial-cognition
+      component: redis
+  template:
+    metadata:
+      labels:
+        app: industrial-cognition
+        component: redis
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8001"
+    spec:
+      containers:
+      - name: redis
+        image: redis:7-alpine
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 6379
+          name: redis
+          protocol: TCP
+        - containerPort: 8001
+          name: metrics
+          protocol: TCP
+        args:
+        - --maxmemory-policy
+        - allkeys-lru
+        - --maxmemory
+        - 1000mb
+        - --maxmemory-samples
+        - "5"
+        env:
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: industrial-cognition-secrets
+              key: REDIS_PASSWORD
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "1000m"
+        livenessProbe:
+          tcpSocket:
+            port: 6379
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          tcpSocket:
+            port: 6379
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        volumeMounts:
+        - name: data
+          mountPath: /data
+          readOnly: false
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: industrial-cognition-redis-data
+---
+# Redis Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: industrial-cognition-redis
+  labels:
+    app: industrial-cognition
+    component: redis
+spec:
+  type: ClusterIP
+  ports:
+  - port: 6379
+    targetPort: 6379
+    name: redis
+  - port: 8001
+    targetPort: 8001
+    name: metrics
+  selector:
+    app: industrial-cognition
+    component: redis
+---
+# Redis Persistent Volume Claim
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: industrial-cognition-redis-data
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi

@@ -1,0 +1,67 @@
+# Grafana Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: industrial-cognition-grafana
+  labels:
+    app: industrial-cognition
+    component: grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: industrial-cognition
+      component: grafana
+  template:
+    metadata:
+      labels:
+        app: industrial-cognition
+        component: grafana
+    spec:
+      containers:
+      - name: grafana
+        image: grafana/grafana:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 3000
+          name: web
+          protocol: TCP
+        env:
+        # In a real setup, this needs a proper secret/vault integration for initialization
+        - name: GF_SECRET
+          value: "changeme_grafana_secret" 
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "50m"
+          limits:
+            memory: "512Mi"
+            cpu: "200m"
+        volumeMounts:
+        - name: grafana-storage
+          mountPath: /var/lib/grafana
+          readOnly: false
+      volumes:
+      - name: grafana-storage
+        emptyDir: {}
+---
+# Grafana Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: industrial-cognition-grafana
+  labels:
+    app: industrial-cognition
+    component: grafana
+spec:
+  type: ClusterIP
+  ports:
+  - port: 3000
+    targetPort: 3000
+    name: web
+  selector:
+    app: industrial-cognition
+    component: grafana
+---
+# (Note: Grafana setup is complex and usually requires initial datasource configuration 
+# (connecting to Prometheus) and dashboard seeding. This manifest only deploys the container.)

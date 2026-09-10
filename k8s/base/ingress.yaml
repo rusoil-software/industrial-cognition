@@ -1,0 +1,41 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: industrial-cognition-ingress
+  labels:
+    app: industrial-cognition
+  annotations:
+  # Example annotation for using Nginx Ingress Controller
+  nginx.ingress.kubernetes.io/rewrite-target: /
+  # Add any required ingress controller class name here
+  kubernetes.io/ingress.class: nginx
+spec:
+  rules:
+  - host: api.industrial-cognition.com # Change this to the actual FQDN
+    http:
+      paths:
+      - path: /v1/
+        pathType: Prefix
+        backend:
+          service:
+            name: industrial-cognition-api # Must match the deployed API service name
+            port:
+              number: 80 # Assuming the API service exposes traffic on port 80/8080
+---
+# Optional: Service for the API if it's not exposed via a standard service type
+apiVersion: v1
+kind: Service
+metadata:
+  name: industrial-cognition-api
+  labels:
+    app: industrial-cognition
+    component: api
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 8080 # Assuming the FastAPI runs on 8080 internally
+    name: http
+  selector:
+    app: industrial-cognition
+    component: api

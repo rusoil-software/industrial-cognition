@@ -1,0 +1,97 @@
+# Camera Service Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: industrial-cognition-camera
+  labels:
+    app: industrial-cognition
+    component: camera
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: industrial-cognition
+      component: camera
+  template:
+    metadata:
+      labels:
+        app: industrial-cognition
+        component: camera
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+    spec:
+      containers:
+      - name: camera
+        image: industrial-cognition/camera:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          name: http
+          protocol: TCP
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: industrial-cognition-config
+              key: DATABASE_URL
+        - name: RABBITMQ_URL
+          valueFrom:
+            configMapKeyRef:
+              name: industrial-cognition-config
+              key: RABBITMQ_URL
+        - name: CAMERA_STREAMS
+          valueFrom:
+            configMapKeyRef:
+              name: industrial-cognition-config
+              key: CAMERA_STREAMS
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: industrial-cognition-config
+              key: LOG_LEVEL
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "200m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        volumeMounts:
+        - name: config
+          mountPath: /app/config
+          readOnly: true
+      volumes:
+      - name: config
+        configMap:
+          name: industrial-cognition-config
+---
+# Camera Service Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: industrial-cognition-camera
+  labels:
+    app: industrial-cognition
+    component: camera
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 8000
+    name: http
+  selector:
+    app: industrial-cognition
+    component: camera

@@ -1,0 +1,111 @@
+# Vision Service Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: industrial-cognition-vision
+  labels:
+    app: industrial-cognition
+    component: vision
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: industrial-cognition
+      component: vision
+  template:
+    metadata:
+      labels:
+        app: industrial-cognition
+        component: vision
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        nvidia.com/gpu: "any"
+    spec:
+      containers:
+      - name: vision
+        image: industrial-cognition/vision:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          name: http
+          protocol: TCP
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: industrial-cognition-config
+              key: DATABASE_URL
+        - name: RABBITMQ_URL
+          valueFrom:
+            configMapKeyRef:
+              name: industrial-cognition-config
+              key: RABBITMQ_URL
+        - name: MINIO_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: industrial-cognition-config
+              key: MINIO_ENDPOINT
+        - name: MODEL_PATH
+          valueFrom:
+            configMapKeyRef:
+              name: industrial-cognition-config
+              key: MODEL_PATH
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: industrial-cognition-config
+              key: LOG_LEVEL
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "500m"
+            nvidia.com/gpu: "1"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+            nvidia.com/gpu: "1"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        volumeMounts:
+        - name: config
+          mountPath: /app/config
+          readOnly: true
+        - name: model-cache
+          mountPath: /app/models
+          readOnly: true
+      volumes:
+      - name: config
+        configMap:
+          name: industrial-cognition-config
+      - name: model-cache
+        persistentVolumeClaim:
+          claimName: industrial-cognition-model-cache
+---
+# Vision Service Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: industrial-cognition-vision
+  labels:
+    app: industrial-cognition
+    component: vision
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 8000
+    name: http
+  selector:
+    app: industrial-cognition
+    component: vision
