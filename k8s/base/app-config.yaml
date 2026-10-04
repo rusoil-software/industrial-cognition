@@ -1,0 +1,94 @@
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# author : Konstantin Ustiuzhanin
+# date   : 2026-Oct-4
+# ==============================================================================
+#
+# Non-secret runtime configuration consumed by every Deployment through
+# `envFrom`. See doc/k8s.md §3 for the key/consumer table.
+#
+# Credentials are intentionally absent: they live in the generated Secret
+# `industrial-cognition-secrets` (k8s/base/secrets.env).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: industrial-cognition-config
+  namespace: cogni-ns
+  labels:
+    app.kubernetes.io/name: industrial-cognition
+    app.kubernetes.io/component: config
+data:
+  # ---------------------------------------------------------------- application
+  ENVIRONMENT: "production"
+  APP_VERSION: "1.0.0"
+  LOG_LEVEL: "INFO"
+  TZ: "UTC"
+  CORS_ORIGINS: '["https://mvm.example.com"]'
+
+  # ------------------------------------------------------------ vision / OWLv2
+  # Consumed by src/owl/inference/config.py (pydantic BaseSettings).
+  OWL2_MODEL_PATH: "/app/models/owl2_model.onnx"
+  OWL2_EXECUTION_PROVIDER: "CPUExecutionProvider"
+  OWL2_MAX_BATCH_SIZE: "32"
+  MODEL_PATH: "/app/models/owl2_model.onnx"
+  MIN_CONFIDENCE_THRESHOLD: "0.75"
+  SCALE_FACTOR_MM_PER_UNIT: "3000.0"
+
+  # ------------------------------------------------------------- async pipeline
+  # Consumed by src/tasks/celery.py.
+  CELERY_BROKER_URL: "amqp://cogni:cogni-dev-password@rabbitmq:5672//"
+  CELERY_RESULT_BACKEND: "redis://redis:6379/0"
+  CELERY_QUEUES: "vision,vision.priority,vision.results,vision.dlq"
+  CELERY_TASK_DEFAULT_QUEUE: "vision"
+  CELERY_WORKER_PREFETCH_MULTIPLIER: "1"
+  CELERY_WORKER_CONCURRENCY: "2"
+
+  # ------------------------------------------------------------ data endpoints
+  DATABASE_URL: "postgresql+psycopg://cogni:cogni-dev-password@postgres:5432/cogni_db"
+  POSTGRES_HOST: "postgres"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "cogni_db"
+  RABBITMQ_HOST: "rabbitmq"
+  RABBITMQ_PORT: "5672"
+  REDIS_HOST: "redis"
+  REDIS_PORT: "6379"
+  MINIO_ENDPOINT: "minio:9000"
+  MINIO_SECURE: "false"
+  MINIO_BUCKET_FRAMES: "frames"
+  MINIO_BUCKET_RESULTS: "results"
+
+  # ------------------------------------------------------------------- cameras
+  # Comma-separated `id=rtsp-url` pairs, one per physical camera.
+  CAMERA_STREAMS: "main=rtsp://192.168.1.10:554/stream1"
+  CAMERA_IP: "192.168.1.10"
+  CAMERA_PORT: "554"
+  DEFAULT_FPS: "30"
+  DEFAULT_WIDTH: "1920"
+  DEFAULT_HEIGHT: "1080"
+  STREAM_CODEC: "h264"
+
+  # -------------------------------------------------------------------- robot
+  # Binary Modbus; RS-485 is the authority (doc/conventions.md §3). The TCP
+  # fallback is used when MODBUS_HOST is set.
+  MODBUS_INTERFACE: "/dev/ttyUSB0"
+  MODBUS_BAUD_RATE: "9600"
+  MODBUS_SLAVE_ID: "1"
+  MODBUS_HOST: ""
+  MODBUS_PORT: "502"
+  MODBUS_TRANSPORT: "rtu"
+
+  # --------------------------------------------------------------- observability
+  PROMETHEUS_MULTIPROC_DIR: "/tmp/prometheus"
+  METRICS_PORT: "9100"

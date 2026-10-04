@@ -196,7 +196,7 @@ Follow the steps in [Onboarding](https://github.com/rusoil-software/industrial-c
 3. Run deployment script
 
    ```sh
-   sh scripts/install.sh
+   sh install.sh
    ```
 
 4. Wait until installation and deployment is finished
@@ -204,6 +204,30 @@ Follow the steps in [Onboarding](https://github.com/rusoil-software/industrial-c
 5. Go to `your-server-public-ip/dashboard` (with deployment via reverse proxy) or `localhost:8080/dashboard` (for development on local machine) to see the MVM Web App
 
 6. Follow initial setup instructions within the MVM App
+
+### Kubernetes Deployment
+
+`install.sh` brings up the Docker Compose stack for local development. Production and staging run on
+Kubernetes from the Kustomize overlays in [`k8s/`](k8s):
+
+```sh
+# Preview exactly what will be created (no cluster changes)
+kubectl kustomize k8s/overlays/prod | less
+
+# Single-node / local cluster (single-server MinIO, no autoscaling, monitoring off)
+./k8s/scripts/deploy.sh --overlay dev
+
+# Full topology: 4-server MinIO, monitoring (Prometheus/Grafana/Loki/Alloy),
+# GPU inference, edge device mounts, network segmentation
+./k8s/scripts/deploy.sh --overlay prod --image-tag "$(git rev-parse --short HEAD)"
+
+# Check the manifests without a cluster
+./k8s/scripts/validate.sh
+```
+
+The full operating guide — resource map, configuration and secret contract, storage model, ingress/WebSocket
+requirements, scaling, GPU scheduling, observability and a troubleshooting table — is
+[`doc/k8s.md`](doc/k8s.md).
 
 <!-- USAGE EXAMPLES -->
 ## Usage
@@ -217,6 +241,7 @@ The following files detail *how* to build and *how* to maintain the system:
 * **`doc/workflow.md`**: Mandatory step-by-step guide for all feature development, emphasizing sequential workflow adherence.
 * **`doc/conventions.md`**: Contains the hard rules (KISS, SRP, Modbus usage) that every line of code must follow.
 * **`doc/tasklist.md`**: The master tracker for tracking all remaining development tasks.
+* **`doc/k8s.md`**: The Kubernetes deployment model, operator runbook and manifest validation contract.
 
 <!-- ROADMAP -->
 ## Roadmap

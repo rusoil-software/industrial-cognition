@@ -1,0 +1,131 @@
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# author : Konstantin Ustiuzhanin
+# date   : 2026-Oct-4
+# ==============================================================================
+#
+# Availability guardrails: disruption budgets, namespace bounds and default
+# resource sizing.
+#
+# `robot` deliberately has no PodDisruptionBudget: it is a singleton on a
+# `Recreate` strategy, and a PDB with minAvailable: 1 would block node drains
+# forever without providing any availability benefit.
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: api
+  namespace: cogni-ns
+  labels:
+    app.kubernetes.io/name: industrial-cognition
+    app.kubernetes.io/component: api
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: industrial-cognition
+      app.kubernetes.io/component: api
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: vision
+  namespace: cogni-ns
+  labels:
+    app.kubernetes.io/name: industrial-cognition
+    app.kubernetes.io/component: vision
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: industrial-cognition
+      app.kubernetes.io/component: vision
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: rabbitmq
+  namespace: cogni-ns
+  labels:
+    app.kubernetes.io/name: industrial-cognition
+    app.kubernetes.io/component: rabbitmq
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: industrial-cognition
+      app.kubernetes.io/component: rabbitmq
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: minio
+  namespace: cogni-ns
+  labels:
+    app.kubernetes.io/name: industrial-cognition
+    app.kubernetes.io/component: minio
+spec:
+  # Distributed MinIO tolerates a minority loss; keep 3 of 4 available.
+  minAvailable: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: industrial-cognition
+      app.kubernetes.io/component: minio
+---
+# Default requests/limits for any container that forgets to declare them.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: industrial-cognition-defaults
+  namespace: cogni-ns
+  labels:
+    app.kubernetes.io/name: industrial-cognition
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: 500m
+        memory: 512Mi
+      defaultRequest:
+        cpu: 100m
+        memory: 128Mi
+      max:
+        cpu: "8"
+        memory: 16Gi
+    - type: PersistentVolumeClaim
+      max:
+        storage: 500Gi
+---
+# Hard ceiling for the namespace, sized for the documented single-server
+# industrial prototype plus the distributed MinIO/broker volumes.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: industrial-cognition-quota
+  namespace: cogni-ns
+  labels:
+    app.kubernetes.io/name: industrial-cognition
+spec:
+  hard:
+    requests.cpu: "16"
+    requests.memory: 32Gi
+    limits.cpu: "40"
+    limits.memory: 96Gi
+    persistentvolumeclaims: "20"
+    requests.storage: 1Ti
+    pods: "60"
+    count/deployments.apps: "12"
+    count/statefulsets.apps: "8"
+    count/jobs.batch: "10"

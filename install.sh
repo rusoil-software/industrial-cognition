@@ -95,3 +95,33 @@ else
     echo "SUCCESS: Core services (API Gateway & Vision Worker) are running in the background."
     echo "====================================================================================="
 fi
+
+# ==============================================================================
+# KUBERNETES PATH
+# ==============================================================================
+# The compose stack above is the local-development path. The production path is
+# the Kustomize overlay set in k8s/ (see doc/k8s.md). Run it with:
+#
+#   ./k8s/scripts/deploy.sh --overlay dev      # single-node / local cluster
+#   ./k8s/scripts/deploy.sh --overlay prod     # full topology + monitoring
+#
+# Validate the manifests without a cluster at any time:
+#
+#   ./k8s/scripts/validate.sh
+# ==============================================================================
+
+if command -v kubectl &> /dev/null; then
+    echo
+    echo "-------------------------------------------------------------------------------------"
+    echo "kubectl detected. The Kubernetes deployment path is available:"
+    echo "    ./k8s/scripts/deploy.sh --overlay dev"
+    echo "Documentation: doc/k8s.md"
+    echo "-------------------------------------------------------------------------------------"
+else
+    echo
+    echo "-------------------------------------------------------------------------------------"
+    echo "kubectl not found. Only the Docker Compose stack was started."
+    echo "For the Kubernetes deployment described in doc/k8s.md, install kubectl and run:"
+    echo "    ./k8s/scripts/deploy.sh --overlay dev"
+    echo "-------------------------------------------------------------------------------------"
+fi

@@ -1,0 +1,43 @@
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# author : Konstantin Ustiuzhanin
+# date   : 2026-Oct-4
+# ==============================================================================
+#
+# Optional component: queue-depth autoscaling for the vision workers via KEDA.
+#
+# Kept out of the `prod` overlay's default resource list because it requires the
+# KEDA operator and its CRDs to be installed in the cluster - without them any
+# `kubectl apply` of this component fails outright.
+#
+# Enabling it is a resource swap in the overlay, not a delete patch: Kustomize
+# components cannot remove objects contributed by the kustomization that includes
+# them, so the mutually exclusive CPU HPA is dropped from `resources` instead.
+#
+#   # Before (CPU-based, the default):
+#   #   resources: [..., autoscaling.yaml, hpa-vision-cpu.yaml, ...]
+#   #
+#   # After (queue-depth):
+#   #   resources: [..., autoscaling.yaml, ...]        # no hpa-vision-cpu.yaml
+#   components:
+#     - ../../components/monitoring
+#     - ../../components/keda
+#
+# See doc/k8s.md §7.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+resources:
+- scaledobject.yaml

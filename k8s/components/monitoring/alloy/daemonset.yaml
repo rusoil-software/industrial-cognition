@@ -1,0 +1,264 @@
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# author : Konstantin Ustiuzhanin
+# date   : 2026-Oct-4
+# ==============================================================================
+#
+# Grafana Alloy - the log collector that ships pod logs to Loki.
+#
+# Alloy is named in doc/vision.md's technology list, and log aggregation is a
+# stated observability requirement, so this replaces the previously missing
+# component in the deleted `deployment-grafana.yaml` placeholder.
+#
+# It runs as a DaemonSet and tails /var/log/pods directly (the same mechanism
+# the Grafana Kubernetes Monitoring Helm chart uses), so it needs no log-agent
+# CRDs and no sidecars.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: alloy
+  namespace: cogni-ns
+  labels:
+    app.kubernetes.io/name: industrial-cognition
+    app.kubernetes.io/component: alloy
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: industrial-cognition-alloy
+  labels:
+    app.kubernetes.io/name: industrial-cognition
+    app.kubernetes.io/component: alloy
+rules:
+  # Required to enumerate pods and their containers so log files can be mapped
+  # to pod/namespace/container labels.
+  - apiGroups: [""]
+    resources: ["pods", "namespaces", "nodes"]
+    verbs: ["get", "list", "watch"]
+  # Required by the `loki.source.kubernetes` stage if it is enabled later.
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: industrial-cognition-alloy
+  labels:
+    app.kubernetes.io/name: industrial-cognition
+    app.kubernetes.io/component: alloy
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: industrial-cognition-alloy
+subjects:
+  - kind: ServiceAccount
+    name: alloy
+    namespace: cogni-ns
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alloy-config
+  namespace: cogni-ns
+  labels:
+    app.kubernetes.io/name: industrial-cognition
+    app.kubernetes.io/component: alloy
+data:
+  config.alloy: |
+    // ---------------------------------------------------------------------
+    // Pod discovery: enumerate every pod and derive the log file path from the
+    // pod UID, which is how the kubelet lays out /var/log/pods.
+    // ---------------------------------------------------------------------
+    discovery.kubernetes "pods" {
+      role = "pod"
+    }
+
+    discovery.relabel "pod_logs" {
+      targets = discovery.kubernetes.pods.targets
+
+      rule {
+        source_labels = ["__meta_kubernetes_namespace"]
+        target_label  = "namespace"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_pod_name"]
+        target_label  = "pod"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_pod_container_name"]
+        target_label  = "container"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_component"]
+        target_label  = "component"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_pod_uid", "__meta_kubernetes_pod_container_name"]
+        separator     = "/"
+        action        = "replace"
+        replacement   = "/var/log/pods/*$1/*.log"
+        target_label  = "__path__"
+      }
+    }
+
+    local.file_match "pod_logs" {
+      path_targets = discovery.relabel.pod_logs.output
+    }
+
+    loki.source.file "pod_logs" {
+      targets    = local.file_match.pod_logs.targets
+      forward_to = [loki.process.pod_logs.receiver]
+    }
+
+    // Parse the kubelet's CRI log envelope and surface JSON application logs.
+    // Parsing failures are not fatal, so a plain-text log line still ships.
+    loki.process "pod_logs" {
+      forward_to = [loki.write.default.receiver]
+
+      stage.cri {}
+
+      stage.json {
+        expressions = {
+          level   = "level",
+          message = "message",
+          logger  = "logger",
+        }
+      }
+
+      // Application logs are configured as JSON (doc/vision.md "Logging
+      // Approach"), but fall back to the raw line when JSON parsing fails.
+      stage.labels {
+        values = {
+          level  = "level",
+          logger = "logger",
+        }
+      }
+    }
+
+    loki.write "default" {
+      endpoint {
+        url = "http://loki.cogni-ns.svc.cluster.local:3100/loki/api/v1/push"
+      }
+      external_labels = {
+        cluster = "industrial-cognition",
+      }
+    }
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: alloy
+  namespace: cogni-ns
+  labels:
+    app.kubernetes.io/name: industrial-cognition
+    app.kubernetes.io/component: alloy
+    app.kubernetes.io/part-of: industrial-cognition
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: industrial-cognition
+      app.kubernetes.io/component: alloy
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: industrial-cognition
+        app.kubernetes.io/component: alloy
+        app.kubernetes.io/part-of: industrial-cognition
+    spec:
+      serviceAccountName: alloy
+      automountServiceAccountToken: true
+      priorityClassName: industrial-cognition-standard
+      tolerations:
+        # The collector must run on every node, including tainted edge/GPU nodes.
+        - operator: Exists
+      securityContext:
+        # Alloy must be able to read /var/log/pods, which is root-only.
+        runAsUser: 0
+        runAsGroup: 0
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: alloy
+          image: grafana/alloy:v1.2.1
+          imagePullPolicy: IfNotPresent
+          args:
+            - run
+            - /etc/alloy/config.alloy
+            - --server.http.listen-addr=0.0.0.0:12345
+            - --storage.path=/var/lib/alloy/data
+          ports:
+            - { name: http, containerPort: 12345, protocol: TCP }
+          env:
+            - name: ALLOY_DEPLOY_MODE
+              value: "kubernetes"
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef: { fieldPath: spec.nodeName }
+          livenessProbe:
+            httpGet: { path: /-/healthy, port: http }
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          readinessProbe:
+            httpGet: { path: /-/ready, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - { name: config, mountPath: /etc/alloy, readOnly: true }
+            - { name: varlogpods, mountPath: /var/log/pods, readOnly: true }
+            - { name: varlibdockercontainers, mountPath: /var/lib/docker/containers, readOnly: true }
+            - { name: data, mountPath: /var/lib/alloy/data }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: config
+          configMap:
+            name: alloy-config
+        - name: varlogpods
+          hostPath:
+            path: /var/log/pods
+            type: Directory
+        - name: varlibdockercontainers
+          hostPath:
+            path: /var/lib/docker/containers
+            # `DirectoryOrCreate` keeps the pod schedulable on containerd nodes
+            # that do not use the Docker runtime.
+            type: DirectoryOrCreate
+        - name: data
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

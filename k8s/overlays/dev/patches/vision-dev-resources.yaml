@@ -1,0 +1,55 @@
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# author : Konstantin Ustiuzhanin
+# date   : 2026-Oct-4
+# ==============================================================================
+#
+# Dev overlay: one CPU-only inference worker.
+#
+# The base asks for 2 replicas at 2Gi/6Gi each, which will not schedule on a
+# typical development machine. One replica at 1Gi/4Gi exercises the whole
+# RabbitMQ -> worker -> Redis/MinIO path without the footprint.
+#
+# `OWL2_EXECUTION_PROVIDER` already defaults to `CPUExecutionProvider` in the
+# base Deployment and the ConfigMap, so nothing else is needed for CPU-only.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vision
+  namespace: cogni-ns
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: vision
+          args:
+            - "-A"
+            - "src.tasks.celery"
+            - "worker"
+            - "--loglevel=INFO"
+            - "--concurrency=1"
+            - "--prefetch-multiplier=1"
+            - "-Q"
+            - "vision,vision.priority"
+            - "-n"
+            - "vision@%h"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi

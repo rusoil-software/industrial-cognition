@@ -1,97 +1,162 @@
-# Camera Service Deployment
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# author : Konstantin Ustiuzhanin
+# date   : 2026-Oct-4
+# ==============================================================================
+#
+# Camera Service (`src/camera/service.py`): owns the FFmpeg/RTSP capture
+# pipelines. Uses the canonical `api` image because that is the only Dockerfile
+# that ships the full `src` tree with the API dependency set
+# (doc/project-development.md: "Always use the Dockerfile as main docker file,
+# do not create others").
+#
+# Node placement: the node must be able to reach the RTSP cameras. Deployments
+# on a dedicated camera subnet pin the `industrial-cognition/role: edge` label;
+# remove the `nodeSelector` in an overlay for a single-node cluster.
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: industrial-cognition-camera
+  name: camera
+  namespace: cogni-ns
   labels:
-    app: industrial-cognition
-    component: camera
+    app.kubernetes.io/name: industrial-cognition
+    app.kubernetes.io/component: camera
+    app.kubernetes.io/part-of: industrial-cognition
 spec:
   replicas: 1
+  revisionHistoryLimit: 5
+  strategy:
+    # A camera pod holds RTSP sessions open; never run two generations at once.
+    type: Recreate
   selector:
     matchLabels:
-      app: industrial-cognition
-      component: camera
+      app.kubernetes.io/name: industrial-cognition
+      app.kubernetes.io/component: camera
   template:
     metadata:
       labels:
-        app: industrial-cognition
-        component: camera
+        app.kubernetes.io/name: industrial-cognition
+        app.kubernetes.io/component: camera
+        app.kubernetes.io/part-of: industrial-cognition
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
     spec:
+      serviceAccountName: camera
+      automountServiceAccountToken: false
+      priorityClassName: industrial-cognition-standard
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        # Video devices are owned by group `video` (GID 44) on Linux hosts.
+        supplementalGroups: [44]
+        seccompProfile:
+          type: RuntimeDefault
       containers:
-      - name: camera
-        image: industrial-cognition/camera:latest
-        imagePullPolicy: Always
-        ports:
-        - containerPort: 8000
-          name: http
-          protocol: TCP
-        env:
-        - name: DATABASE_URL
-          valueFrom:
-            configMapKeyRef:
-              name: industrial-cognition-config
-              key: DATABASE_URL
-        - name: RABBITMQ_URL
-          valueFrom:
-            configMapKeyRef:
-              name: industrial-cognition-config
-              key: RABBITMQ_URL
-        - name: CAMERA_STREAMS
-          valueFrom:
-            configMapKeyRef:
-              name: industrial-cognition-config
-              key: CAMERA_STREAMS
-        - name: LOG_LEVEL
-          valueFrom:
-            configMapKeyRef:
-              name: industrial-cognition-config
-              key: LOG_LEVEL
-        resources:
-          requests:
-            memory: "512Mi"
-            cpu: "200m"
-          limits:
-            memory: "1Gi"
-            cpu: "1000m"
-        livenessProbe:
-          httpGet:
-            path: /health
-            port: 8000
-          initialDelaySeconds: 30
-          periodSeconds: 10
-        readinessProbe:
-          httpGet:
-            path: /health
-            port: 8000
-          initialDelaySeconds: 10
-          periodSeconds: 5
-        volumeMounts:
-        - name: config
-          mountPath: /app/config
-          readOnly: true
+        - name: camera
+          image: industrial-cognition/api:latest
+          imagePullPolicy: IfNotPresent
+          command: ["uvicorn"]
+          args: ["src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: industrial-cognition-config
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef: { name: industrial-cognition-secrets, key: POSTGRES_USER }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: industrial-cognition-secrets, key: POSTGRES_PASSWORD }
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef: { name: industrial-cognition-secrets, key: POSTGRES_DB }
+            - name: DATABASE_URL
+              value: "postgresql+psycopg://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/$(POSTGRES_DB)"
+            - name: CAMERA_NODE_NAME
+              valueFrom:
+                fieldRef: { fieldPath: spec.nodeName }
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            privileged: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: shm, mountPath: /dev/shm }
+            # A V4L2 capture device (`/dev/video0`) is patched in by the overlay
+            # for the node that owns the camera; the base stays device-free so
+            # it can be scheduled on any edge node.
       volumes:
-      - name: config
-        configMap:
-          name: industrial-cognition-config
+        - name: tmp
+          emptyDir: {}
+        # FFmpeg decodes through shared memory; the 64Mi default is too small
+        # for concurrent 1080p streams.
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi
 ---
-# Camera Service Service
 apiVersion: v1
 kind: Service
 metadata:
-  name: industrial-cognition-camera
+  name: camera
+  namespace: cogni-ns
   labels:
-    app: industrial-cognition
-    component: camera
+    app.kubernetes.io/name: industrial-cognition
+    app.kubernetes.io/component: camera
 spec:
   type: ClusterIP
   ports:
-  - port: 80
-    targetPort: 8000
-    name: http
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
   selector:
-    app: industrial-cognition
-    component: camera
+    app.kubernetes.io/name: industrial-cognition
+    app.kubernetes.io/component: camera

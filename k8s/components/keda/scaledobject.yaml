@@ -1,0 +1,112 @@
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# author : Konstantin Ustiuzhanin
+# date   : 2026-Oct-4
+# ==============================================================================
+#
+# Queue-depth autoscaling for the vision workers.
+#
+# CPU utilisation is a poor proxy for inference backlog: the workers sit idle
+# waiting on RabbitMQ while the queue grows. The architecture diagram therefore
+# calls for scaling on *queue depth*, which needs an external metric provider.
+# KEDA's RabbitMQ scaler reads the queue directly from the management API, so no
+# Prometheus Adapter or custom metrics API is required.
+#
+# REQUIREMENTS
+#   1. The KEDA operator must be installed in the cluster.
+#   2. Delete the CPU-based `vision` HorizontalPodAutoscaler from
+#      `autoscaling.yaml` when this object is enabled - otherwise both
+#      controllers write `spec.replicas` and fight.
+#   3. The `vision` Deployment must not set `replicas` explicitly once KEDA owns
+#      the scale subresource; KEDA writes it anyway, and a GitOps diff will flap.
+#
+# KEDA's RabbitMQ scaler needs a single `host` value in
+# `amqp://user:password@host:port/vhost` form. Kubernetes cannot concatenate
+# separate Secret keys into one value, so the full URL is its own Secret entry
+# (`RABBITMQ_URL` in k8s/base/secrets.env) and is rotated alongside the
+# individual credentials.
+#
+# Enable by adding the component to an overlay:
+#
+#   components:
+#     - ../../components/keda
+#
+# The component also deletes the CPU-based `vision` HorizontalPodAutoscaler, so
+# only one controller writes `spec.replicas`.
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: rabbitmq-vision
+  namespace: cogni-ns
+  labels:
+    app.kubernetes.io/name: industrial-cognition
+    app.kubernetes.io/component: vision
+spec:
+  secretTargetRef:
+    # Full AMQP URL, e.g. amqp://cogni:pass@rabbitmq:5672//
+    - parameter: host
+      name: industrial-cognition-secrets
+      key: RABBITMQ_URL
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: vision
+  namespace: cogni-ns
+  labels:
+    app.kubernetes.io/name: industrial-cognition
+    app.kubernetes.io/component: vision
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vision
+  minReplicaCount: 2
+  maxReplicaCount: 8
+  pollingInterval: 15
+  # Keep one warm worker so a burst is not paid for with a cold ONNX session.
+  cooldownPeriod: 300
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 30
+          policies:
+            - { type: Pods, value: 2, periodSeconds: 60 }
+        scaleDown:
+          stabilizationWindowSeconds: 600
+          policies:
+            - { type: Pods, value: 1, periodSeconds: 300 }
+  triggers:
+    - type: rabbitmq
+      authenticationRef:
+        name: rabbitmq-vision
+      metadata:
+        # `host` must include the scheme for KEDA's RabbitMQ scaler.
+        protocol: amqp
+        queueName: vision
+        mode: QueueLength
+        value: "20"
+        # Also scale on the priority queue, which carries the urgent work.
+    - type: rabbitmq
+      authenticationRef:
+        name: rabbitmq-vision
+        namespace: cogni-ns
+      metadata:
+        protocol: amqp
+        queueName: vision.priority
+        mode: QueueLength
+        value: "5"

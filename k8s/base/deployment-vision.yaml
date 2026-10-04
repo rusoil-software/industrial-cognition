@@ -1,111 +1,213 @@
-# Vision Service Deployment
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# author : Konstantin Ustiuzhanin
+# date   : 2026-Oct-4
+# ==============================================================================
+#
+# Vision worker (`src/tasks/celery.py` + `src/vision/service.py`): consumes the
+# `vision` priority queue from RabbitMQ, runs OWLv2 through ONNX Runtime and
+# writes results to Redis/MinIO.
+#
+# The worker is CPU-capable (`OWL2_EXECUTION_PROVIDER=CPUExecutionProvider`) so
+# that a cheap cluster can boot the whole stack; the `gpu` patch in the overlays
+# turns on the GPU scheduling block below.
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: industrial-cognition-vision
+  name: vision
+  namespace: cogni-ns
   labels:
-    app: industrial-cognition
-    component: vision
+    app.kubernetes.io/name: industrial-cognition
+    app.kubernetes.io/component: vision
+    app.kubernetes.io/part-of: industrial-cognition
 spec:
-  replicas: 1
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # GPU capacity is scarce: never demand more than one extra pod at a time.
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
-      app: industrial-cognition
-      component: vision
+      app.kubernetes.io/name: industrial-cognition
+      app.kubernetes.io/component: vision
   template:
     metadata:
       labels:
-        app: industrial-cognition
-        component: vision
+        app.kubernetes.io/name: industrial-cognition
+        app.kubernetes.io/component: vision
+        app.kubernetes.io/part-of: industrial-cognition
       annotations:
         prometheus.io/scrape: "true"
-        prometheus.io/port: "8000"
-        nvidia.com/gpu: "any"
+        prometheus.io/port: "9100"
+        prometheus.io/path: "/metrics"
     spec:
+      serviceAccountName: vision
+      automountServiceAccountToken: false
+      priorityClassName: industrial-cognition-standard
+      terminationGracePeriodSeconds: 60
+      # --- GPU scheduling (patched on by k8s/overlays/prod/gpu) ---------------
+      # nodeSelector:
+      #   nvidia.com/gpu.present: "true"
+      # tolerations:
+      #   - key: nvidia.com/gpu
+      #     operator: Exists
+      #     effect: NoSchedule
+      # -----------------------------------------------------------------------
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: industrial-cognition
+              app.kubernetes.io/component: vision
       containers:
-      - name: vision
-        image: industrial-cognition/vision:latest
-        imagePullPolicy: Always
-        ports:
-        - containerPort: 8000
-          name: http
-          protocol: TCP
-        env:
-        - name: DATABASE_URL
-          valueFrom:
-            configMapKeyRef:
-              name: industrial-cognition-config
-              key: DATABASE_URL
-        - name: RABBITMQ_URL
-          valueFrom:
-            configMapKeyRef:
-              name: industrial-cognition-config
-              key: RABBITMQ_URL
-        - name: MINIO_ENDPOINT
-          valueFrom:
-            configMapKeyRef:
-              name: industrial-cognition-config
-              key: MINIO_ENDPOINT
-        - name: MODEL_PATH
-          valueFrom:
-            configMapKeyRef:
-              name: industrial-cognition-config
-              key: MODEL_PATH
-        - name: LOG_LEVEL
-          valueFrom:
-            configMapKeyRef:
-              name: industrial-cognition-config
-              key: LOG_LEVEL
-        resources:
-          requests:
-            memory: "2Gi"
-            cpu: "500m"
-            nvidia.com/gpu: "1"
-          limits:
-            memory: "4Gi"
-            cpu: "2000m"
-            nvidia.com/gpu: "1"
-        livenessProbe:
-          httpGet:
-            path: /health
-            port: 8000
-          initialDelaySeconds: 30
-          periodSeconds: 10
-        readinessProbe:
-          httpGet:
-            path: /health
-            port: 8000
-          initialDelaySeconds: 10
-          periodSeconds: 5
-        volumeMounts:
-        - name: config
-          mountPath: /app/config
-          readOnly: true
-        - name: model-cache
-          mountPath: /app/models
-          readOnly: true
+        - name: vision
+          image: industrial-cognition/vision:latest
+          imagePullPolicy: IfNotPresent
+          command: ["celery"]
+          args:
+            - "-A"
+            - "src.tasks.celery"
+            - "worker"
+            - "--loglevel=INFO"
+            - "--concurrency=2"
+            - "--prefetch-multiplier=1"
+            - "-Q"
+            - "vision,vision.priority"
+            - "-n"
+            - "vision@%h"
+          ports:
+            - name: metrics
+              containerPort: 9100
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: industrial-cognition-config
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef: { name: industrial-cognition-secrets, key: POSTGRES_USER }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: industrial-cognition-secrets, key: POSTGRES_PASSWORD }
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef: { name: industrial-cognition-secrets, key: POSTGRES_DB }
+            - name: RABBITMQ_DEFAULT_USER
+              valueFrom:
+                secretKeyRef: { name: industrial-cognition-secrets, key: RABBITMQ_DEFAULT_USER }
+            - name: RABBITMQ_DEFAULT_PASS
+              valueFrom:
+                secretKeyRef: { name: industrial-cognition-secrets, key: RABBITMQ_DEFAULT_PASS }
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: industrial-cognition-secrets, key: REDIS_PASSWORD }
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: { name: industrial-cognition-secrets, key: MINIO_ACCESS_KEY }
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef: { name: industrial-cognition-secrets, key: MINIO_SECRET_KEY }
+            - name: DATABASE_URL
+              value: "postgresql+psycopg://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/$(POSTGRES_DB)"
+            - name: CELERY_BROKER_URL
+              value: "amqp://$(RABBITMQ_DEFAULT_USER):$(RABBITMQ_DEFAULT_PASS)@$(RABBITMQ_HOST):$(RABBITMQ_PORT)//"
+            - name: CELERY_RESULT_BACKEND
+              value: "redis://:$(REDIS_PASSWORD)@$(REDIS_HOST):$(REDIS_PORT)/0"
+            # Default for CPU-only clusters; the GPU patch flips this to
+            # CUDAExecutionProvider.
+            - name: OWL2_EXECUTION_PROVIDER
+              value: "CPUExecutionProvider"
+          # Celery gives a precise liveness signal through `inspect ping`. The
+          # reply is redirected to a file because the worker refuses to write to
+          # a stdout that may be closed during a probe.
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - 'celery -A src.tasks.celery inspect ping -d vision@$HOSTNAME --timeout 10 > /tmp/celery-ping.json 2>/dev/null'
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - 'celery -A src.tasks.celery inspect ping -d vision@$HOSTNAME --timeout 10 > /tmp/celery-ping.json 2>/dev/null'
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 15
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 500m
+              memory: 2Gi
+            limits:
+              cpu: "4"
+              memory: 6Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            privileged: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: model-cache, mountPath: /app/models, readOnly: true }
       volumes:
-      - name: config
-        configMap:
-          name: industrial-cognition-config
-      - name: model-cache
-        persistentVolumeClaim:
-          claimName: industrial-cognition-model-cache
+        - name: tmp
+          emptyDir: {}
+        # Populated out-of-band (see doc/k8s.md §4). The OWLv2 ONNX artifact is
+        # git-ignored, so it can never arrive with the manifests.
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: industrial-cognition-model-cache
 ---
-# Vision Service Service
 apiVersion: v1
 kind: Service
 metadata:
-  name: industrial-cognition-vision
+  name: vision
+  namespace: cogni-ns
   labels:
-    app: industrial-cognition
-    component: vision
+    app.kubernetes.io/name: industrial-cognition
+    app.kubernetes.io/component: vision
 spec:
   type: ClusterIP
+  # Headless: the vision Service exists for metric scraping and future
+  # RPC-style lookups, not for request routing.
+  clusterIP: None
   ports:
-  - port: 80
-    targetPort: 8000
-    name: http
+    - name: metrics
+      port: 9100
+      targetPort: metrics
+      protocol: TCP
   selector:
-    app: industrial-cognition
-    component: vision
+    app.kubernetes.io/name: industrial-cognition
+    app.kubernetes.io/component: vision

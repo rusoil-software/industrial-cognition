@@ -1,0 +1,80 @@
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# author : Konstantin Ustiuzhanin
+# date   : 2026-Oct-4
+# ==============================================================================
+#
+# Development overlay: everything needed to boot the whole pipeline on a
+# single-node cluster (Docker Desktop, kind, k3d, minikube).
+#
+# What changes versus production:
+#   * Single-server MinIO and one `vision` replica (no distributed storage
+#     quorum to satisfy, no GPU node required).
+#   * Monitoring is OFF - add `components: [../../components/monitoring]` when
+#     dashboards are actually wanted locally.
+#   * No HPAs, PDBs, ResourceQuota or NetworkPolicies: dev clusters commonly
+#     lack a metrics-server, are drained by nobody, and cannot reach the
+#     physical RTSP/Modbus network that the production policies are written for.
+#   * No edge node selectors, so pods schedule on the one available node.
+#   * Small storage requests.
+#
+# Apply with: `kubectl apply -k k8s/overlays/dev`
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: cogni-ns
+
+
+resources:
+- ../../base
+
+images:
+- name: industrial-cognition/api
+  newTag: dev
+- name: industrial-cognition/vision
+  newTag: dev
+
+  # Small volumes so the overlay fits a laptop disk.
+  # Reduce the inference footprint for a CPU-only box.
+patches:
+- path: patches/minio-single.yaml
+  target:
+    kind: StatefulSet
+    name: minio
+- path: patches/postgres-storage-size.yaml
+  target:
+    kind: StatefulSet
+    name: postgres
+- path: patches/rabbitmq-storage-size.yaml
+  target:
+    kind: StatefulSet
+    name: rabbitmq
+- path: patches/redis-storage-size.yaml
+  target:
+    kind: StatefulSet
+    name: redis
+- path: patches/minio-storage-size.yaml
+  target:
+    kind: StatefulSet
+    name: minio
+- path: patches/model-cache-storage-size.yaml
+  target:
+    kind: PersistentVolumeClaim
+    name: industrial-cognition-model-cache
+- path: patches/vision-dev-resources.yaml
+labels:
+- includeSelectors: true
+  pairs:
+    app.kubernetes.io/part-of: industrial-cognition

@@ -39,3 +39,15 @@ output/
 # ImGui
 imgui.ini
 
+# Kubernetes: production secret overrides.
+# `k8s/base/secrets.env` ships development defaults and IS tracked; the overlay
+# copies that hold real credentials are not. See doc/k8s.md §5.
+k8s/overlays/*/secrets.env
+!k8s/base/secrets.env
+
+# Kubernetes: rendered manifests and local tool state
+k8s/**/*.rendered.yaml
+
+
+# Kubernetes tests: scratch kustomization fixtures
+tests/k8s/.scratch/

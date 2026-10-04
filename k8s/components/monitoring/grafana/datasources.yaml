@@ -1,0 +1,54 @@
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# author : Konstantin Ustiuzhanin
+# date   : 2026-Oct-4
+# ==============================================================================
+#
+# Grafana datasource provisioning.
+#
+# The `uid`s are explicit (not Grafana-generated) for two reasons:
+#   1. Dashboard panels can reference `"datasource": {"uid": "prometheus"}`
+#      deterministically.
+#   2. The host URL is injected by Kustomize `replacements` (see
+#      components/monitoring/kustomization.yaml) so this file is environment
+#      independent and no `$DS_*` placeholder survives into the ConfigMap.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus.cogni-ns.svc.cluster.local:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 15s
+      httpMethod: POST
+      manageAlerts: true
+
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki.cogni-ns.svc.cluster.local:3100
+    isDefault: false
+    editable: false
+    jsonData:
+      maxLines: 1000
+      derivedFields:
+        - name: TraceID
+          matcherRegex: "trace_id=(\\w+)"
+          url: "$${__value.raw}"
