@@ -13,10 +13,7 @@
 # limitations under the License.
 #
 # author : Konstantin Ustiuzhanin
-<<<<<<< HEAD
 # date   : 2026-Oct-4
-=======
->>>>>>> 9353103d5fc4ac064cdee843ceca45b8eb141917
 # ==============================================================================
 #
 # Kustomize base for the Industrial Cognition platform.
@@ -30,11 +27,6 @@ kind: Kustomization
 
 namespace: cogni-ns
 
-<<<<<<< HEAD
-=======
-commonLabels:
-  app.kubernetes.io/part-of: industrial-cognition
->>>>>>> 9353103d5fc4ac064cdee843ceca45b8eb141917
 
 # `autoscaling.yaml`, `availability.yaml` and `networkpolicy.yaml` live under
 # `k8s/overlays/prod/` rather than here: they are policy objects whose
@@ -43,7 +35,6 @@ commonLabels:
 # omits them so that a laptop cluster boots without a metrics-server and without
 # network policies that would black-hole the pipeline. See doc/k8s.md §7 and §6.
 resources:
-<<<<<<< HEAD
 - namespace.yaml
 - serviceaccount.yaml
 - app-config.yaml
@@ -61,31 +52,11 @@ resources:
   # The Deployments reference these objects by name, so the content hash must
   # not be appended.
 generatorOptions:
-=======
-  - namespace.yaml
-  - serviceaccount.yaml
-  - app-config.yaml
-  - storage.yaml
-  - statefulset-postgres.yaml
-  - statefulset-rabbitmq.yaml
-  - statefulset-redis.yaml
-  - statefulset-minio.yaml
-  - deployment-api.yaml
-  - deployment-camera.yaml
-  - deployment-vision.yaml
-  - deployment-robot.yaml
-  - ingress.yaml
-
-generatorOptions:
-  # The Deployments reference these objects by name, so the content hash must
-  # not be appended.
->>>>>>> 9353103d5fc4ac064cdee843ceca45b8eb141917
   disableNameSuffixHash: true
   labels:
     app.kubernetes.io/name: industrial-cognition
     app.kubernetes.io/part-of: industrial-cognition
 
-<<<<<<< HEAD
   # Development defaults; see the warning at the top of secrets.env and
   # doc/k8s.md §5 for the production override procedure.
 secretGenerator:
@@ -103,18 +74,3 @@ labels:
 - includeSelectors: true
   pairs:
     app.kubernetes.io/part-of: industrial-cognition
-=======
-secretGenerator:
-  # Development defaults; see the warning at the top of secrets.env and
-  # doc/k8s.md §5 for the production override procedure.
-  - name: industrial-cognition-secrets
-    envs:
-      - secrets.env
-
-images:
-  # Overlays replace `newTag` with an immutable build identifier.
-  - name: industrial-cognition/api
-    newTag: latest
-  - name: industrial-cognition/vision
-    newTag: latest
->>>>>>> 9353103d5fc4ac064cdee843ceca45b8eb141917
