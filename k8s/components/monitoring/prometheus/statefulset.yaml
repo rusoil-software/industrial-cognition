@@ -136,7 +136,9 @@ spec:
           app.kubernetes.io/component: prometheus
       spec:
         accessModes: ["ReadWriteOnce"]
-        storageClassName: ""
+        # Omitted on purpose = use the cluster's default StorageClass.
+        # storageClassName: "" means NO class, which disables dynamic provisioning
+        # and leaves the claim Pending forever on FailedBinding.
         resources:
           requests:
             storage: 20Gi

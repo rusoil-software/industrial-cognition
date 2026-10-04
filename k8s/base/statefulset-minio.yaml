@@ -102,14 +102,40 @@ spec:
           type: RuntimeDefault
       containers:
         - name: minio
-          image: minio/minio:RELEASE.2025-09-07T16-13-09Z-cpuv1
+          # `minio/minio` and `minio/mc` no longer resolve on Docker Hub or Quay.
+          # Verified with `docker manifest inspect`: both are MISSING while
+          # `alpine`, `redis:7-alpine`, `postgres:15-alpine` and
+          # `rabbitmq:3.13-management-alpine` all resolve - so it is the
+          # upstream repository, not the network or the tag.
+          #
+          # This is the pullable fallback. It ships the server
+          # (`/opt/bitnami/minio/bin/minio`) and the client
+          # (`/opt/bitnami/minio-client/bin/mc`, already on PATH), which is why
+          # the bucket-init Job below reuses it. A production installation should
+          # mirror MinIO into its own registry and pin a digest here - see
+          # doc/k8s.md §4.
+          image: bitnamilegacy/minio:latest
           imagePullPolicy: IfNotPresent
-          command: ["/bin/sh", "-c"]
-          # The volume set is passed through MINIO_VOLUMES (not the shell) so
-          # that MinIO performs its own `{0...3}` host expansion and the command
-          # does not depend on bash brace expansion being available.
+          # The Bitnami entrypoint is bypassed on purpose: it applies its own
+          # single-drive defaults that would fight the distributed
+          # `MINIO_VOLUMES` set below.
+          command: ["/opt/bitnami/minio/bin/minio"]
+          # The volume set MUST also be an argv positional, not only
+          # `MINIO_VOLUMES`. `minio server` with no positional volume argument
+          # fails with `FATAL Invalid command line arguments: use path style
+          # endpoint for single node setup` even when MINIO_VOLUMES is set.
+          #
+          # `$(MINIO_VOLUMES)` is expanded by the kubelet from the env entry
+          # below, so the distributed `{0...3}` host form used by the base and
+          # the single-node `/data` form used by the dev overlay both work here
+          # without duplicating this list.
           args:
-            - exec minio server --console-address :9001 --address :9000
+            - server
+            - "$(MINIO_VOLUMES)"
+            - --console-address
+            - ":9001"
+            - --address
+            - ":9000"
           ports:
             - { name: http, containerPort: 9000, protocol: TCP }
             - { name: console, containerPort: 9001, protocol: TCP }
@@ -166,7 +192,10 @@ spec:
           app.kubernetes.io/component: minio
       spec:
         accessModes: ["ReadWriteOnce"]
-        storageClassName: ""
+        # Omitted on purpose = use the cluster's default StorageClass. storageClassName: ""
+        # means NO class, which disables dynamic provisioning and leaves the claim
+        # Pending forever on FailedBinding. Overlays that need an explicit class add
+        # the field (k8s/overlays/prod/patches/*-storage-class.yaml).
         resources:
           requests:
             storage: 100Gi
@@ -202,12 +231,22 @@ spec:
           type: RuntimeDefault
       containers:
         - name: mc
-          image: minio/mc:RELEASE.2025-08-13T08-35-41Z-cpuv1
+          # Same image as the server: it is the only pullable source of the
+          # `mc` client, and `mc` is already on PATH
+          # (/opt/bitnami/minio-client/bin/mc).
+          image: bitnamilegacy/minio:latest
           imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c"]
           args:
             - |
               set -eu
+              # `mc` persists its alias config under $HOME/.mc, which is not
+              # writable here (readOnlyRootFilesystem + a non-root UID). Without
+              # this, every call fails with
+              # `Unable to save new mc config. open /.mc/...: read-only file system`
+              # inside the retry loop, and the Job never completes.
+              export MC_CONFIG_DIR=/tmp/mc
+              mkdir -p "$MC_CONFIG_DIR"
               until mc alias set local http://minio:9000 "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"; do
                 echo "waiting for minio..."; sleep 5
               done

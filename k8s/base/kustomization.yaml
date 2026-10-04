@@ -27,50 +27,60 @@ kind: Kustomization
 
 namespace: cogni-ns
 
+labels:
+  # Every object gets the project label on its *metadata*.
+  #
+  # `includeSelectors: false` is deliberate. The deprecated `commonLabels` field
+  # (and `includeSelectors: true`) also rewrites `spec.selector` and
+  # `spec.template.metadata.labels`. Selector fields are immutable after
+  # creation, so a later label change would make every subsequent `kubectl
+  # apply` fail with "field is immutable" - and the Services' selectors here are
+  # already written out by hand against these same labels, so injecting them
+  # again buys nothing.
+  - pairs:
+      app.kubernetes.io/part-of: industrial-cognition
+    includeSelectors: false
 
-# `autoscaling.yaml`, `availability.yaml` and `networkpolicy.yaml` live under
-# `k8s/overlays/prod/` rather than here: they are policy objects whose
-# correctness depends on the production topology (metrics-server present, nodes
-# drainable, the physical RTSP/Modbus network reachable). The `dev` overlay
-# omits them so that a laptop cluster boots without a metrics-server and without
-# network policies that would black-hole the pipeline. See doc/k8s.md §7 and §6.
 resources:
-- namespace.yaml
-- serviceaccount.yaml
-- app-config.yaml
-- storage.yaml
-- statefulset-postgres.yaml
-- statefulset-rabbitmq.yaml
-- statefulset-redis.yaml
-- statefulset-minio.yaml
-- deployment-api.yaml
-- deployment-camera.yaml
-- deployment-vision.yaml
-- deployment-robot.yaml
-- ingress.yaml
+  - namespace.yaml
+  - serviceaccount.yaml
+  - app-config.yaml
+  - storage.yaml
+  - statefulset-postgres.yaml
+  - statefulset-rabbitmq.yaml
+  - statefulset-redis.yaml
+  - statefulset-minio.yaml
+  - deployment-api.yaml
+  - deployment-camera.yaml
+  - deployment-vision.yaml
+  - deployment-robot.yaml
+  - ingress.yaml
+  # NOTE: `autoscaling.yaml`, `availability.yaml` and `networkpolicy.yaml` live
+  # under `k8s/overlays/prod/` rather than here. They are policy objects whose
+  # correctness depends on the production topology (a metrics-server being
+  # installed, nodes being drainable, the physical RTSP/Modbus network being
+  # reachable). The `dev` overlay omits them so a laptop cluster boots without
+  # infrastructure it does not have and without a default-deny egress policy
+  # that would black-hole the pipeline. See doc/k8s.md §6 and §7.
 
+generatorOptions:
   # The Deployments reference these objects by name, so the content hash must
   # not be appended.
-generatorOptions:
   disableNameSuffixHash: true
   labels:
     app.kubernetes.io/name: industrial-cognition
     app.kubernetes.io/part-of: industrial-cognition
 
+secretGenerator:
   # Development defaults; see the warning at the top of secrets.env and
   # doc/k8s.md §5 for the production override procedure.
-secretGenerator:
-- envs:
-  - secrets.env
-  name: industrial-cognition-secrets
+  - name: industrial-cognition-secrets
+    envs:
+      - secrets.env
 
-  # Overlays replace `newTag` with an immutable build identifier.
 images:
-- name: industrial-cognition/api
-  newTag: latest
-- name: industrial-cognition/vision
-  newTag: latest
-labels:
-- includeSelectors: true
-  pairs:
-    app.kubernetes.io/part-of: industrial-cognition
+  # Overlays replace `newTag` with an immutable build identifier.
+  - name: industrial-cognition/api
+    newTag: latest
+  - name: industrial-cognition/vision
+    newTag: latest

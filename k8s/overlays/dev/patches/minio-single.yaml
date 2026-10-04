@@ -16,12 +16,22 @@
 # date   : 2026-Oct-4
 # ==============================================================================
 #
-# Dev overlay: collapse the 4-server distributed MinIO (which needs a quorum to
-# become Ready) into a single server that is healthy on its own, and point the
-# readiness probe at the single-node endpoint instead of the cluster endpoint.
+# Dev overlay: collapse the 4-drive distributed MinIO (which needs a quorum to
+# become Ready) into a single server that is healthy on its own.
 #
-# JSON6902 form: a handful of scalar paths change, so a patch list stays clearer
-# than a strategic merge restating the whole StatefulSet.
+# Three things must change together, which is why they are one patch:
+#
+#   1. replicas 4 -> 1
+#   2. MINIO_VOLUMES must become a *filesystem* path. A single-node server
+#      rejects the distributed `http://host:port/data` form outright with
+#      `FATAL Invalid command line arguments: use path style endpoint for single
+#      node setup`. The base keeps the distributed form because it is the
+#      4-replica default.
+#   3. the readiness probe must use /minio/health/ready; /minio/health/cluster
+#      reports on a quorum that no longer exists.
+#
+# JSON6902 form: these are scalar paths inside an env list and a probe, where a
+# strategic merge would have to restate the whole container.
 - op: replace
   path: /spec/replicas
   value: 1
@@ -31,7 +41,7 @@
 - op: replace
   # MINIO_VOLUMES is the first env entry of the MinIO container.
   path: /spec/template/spec/containers/0/env/0/value
-  value: "http://minio-0.minio-headless.cogni-ns.svc.cluster.local:9000/data"
+  value: "/data"
 - op: replace
   path: /spec/template/spec/containers/0/readinessProbe/httpGet/path
   value: /minio/health/ready

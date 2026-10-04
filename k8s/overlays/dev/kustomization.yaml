@@ -36,45 +36,36 @@ kind: Kustomization
 
 namespace: cogni-ns
 
+labels:
+  # Metadata only; see the note in k8s/base/kustomization.yaml about why
+  # `includeSelectors: true` is unsafe.
+  - pairs:
+      app.kubernetes.io/part-of: industrial-cognition
+    includeSelectors: false
 
 resources:
-- ../../base
+  - ../../base
 
 images:
-- name: industrial-cognition/api
-  newTag: dev
-- name: industrial-cognition/vision
-  newTag: dev
+  - name: industrial-cognition/api
+    newTag: dev
+  - name: industrial-cognition/vision
+    newTag: dev
 
-  # Small volumes so the overlay fits a laptop disk.
-  # Reduce the inference footprint for a CPU-only box.
 patches:
-- path: patches/minio-single.yaml
-  target:
-    kind: StatefulSet
-    name: minio
-- path: patches/postgres-storage-size.yaml
-  target:
-    kind: StatefulSet
-    name: postgres
-- path: patches/rabbitmq-storage-size.yaml
-  target:
-    kind: StatefulSet
-    name: rabbitmq
-- path: patches/redis-storage-size.yaml
-  target:
-    kind: StatefulSet
-    name: redis
-- path: patches/minio-storage-size.yaml
-  target:
-    kind: StatefulSet
-    name: minio
-- path: patches/model-cache-storage-size.yaml
-  target:
-    kind: PersistentVolumeClaim
-    name: industrial-cognition-model-cache
-- path: patches/vision-dev-resources.yaml
-labels:
-- includeSelectors: true
-  pairs:
-    app.kubernetes.io/part-of: industrial-cognition
+  # Single-server MinIO: the base is a 4-drive distributed cluster.
+  - target: { kind: StatefulSet, name: minio }
+    path: patches/minio-single.yaml
+  # Small volumes so the overlay fits on a laptop disk.
+  - target: { kind: StatefulSet, name: postgres }
+    path: patches/postgres-storage-size.yaml
+  - target: { kind: StatefulSet, name: rabbitmq }
+    path: patches/rabbitmq-storage-size.yaml
+  - target: { kind: StatefulSet, name: redis }
+    path: patches/redis-storage-size.yaml
+  - target: { kind: StatefulSet, name: minio }
+    path: patches/minio-storage-size.yaml
+  - target: { kind: PersistentVolumeClaim, name: industrial-cognition-model-cache }
+    path: patches/model-cache-storage-size.yaml
+  # Reduce the inference footprint for a CPU-only box.
+  - path: patches/vision-dev-resources.yaml

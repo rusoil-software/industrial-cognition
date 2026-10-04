@@ -227,7 +227,10 @@ spec:
           app.kubernetes.io/component: rabbitmq
       spec:
         accessModes: ["ReadWriteOnce"]
-        storageClassName: ""
+        # Omitted on purpose = use the cluster's default StorageClass. storageClassName: ""
+        # means NO class, which disables dynamic provisioning and leaves the claim
+        # Pending forever on FailedBinding. Overlays that need an explicit class add
+        # the field (k8s/overlays/prod/patches/*-storage-class.yaml).
         resources:
           requests:
             storage: 20Gi

@@ -232,6 +232,22 @@ class RenderedObject:
         return f"<{self.kind} {self.namespace}/{self.name} from {self.source}>"
 
 
+def _label_transformer_pairs(entries: Any) -> dict:
+    """Flatten a kustomization's `labels:` transformer entries into one dict.
+
+    Entries look like ``- pairs: {k: v}``, optionally with
+    ``includeSelectors``/``includeTemplates``. Only the metadata pairs matter
+    here: selectors in this repository are written out by hand, and
+    `includeSelectors` never *removes* a label from metadata.
+    """
+    merged: dict = {}
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            raise UnsupportedKustomizeFeature(f"unsupported labels entry: {entry!r}")
+        merged.update(entry.get("pairs") or {})
+    return merged
+
+
 @dataclass
 class _Context:
     """Inherited kustomization settings, threaded top-down."""
@@ -243,6 +259,23 @@ class _Context:
     disable_name_suffix_hash: bool = False
     images: list = field(default_factory=list)
 
+    @classmethod
+    def root(cls, kustomization: dict, directory: Path) -> "_Context":
+        options = kustomization.get("generatorOptions") or {}
+        return cls(
+            directory=directory,
+            namespace=kustomization.get("namespace", ""),
+            common_labels={
+                **(kustomization.get("commonLabels") or {}),
+                **_label_transformer_pairs(kustomization.get("labels")),
+            },
+            generator_labels=dict(options.get("labels") or {}),
+            disable_name_suffix_hash=bool(
+                options.get("disableNameSuffixHash", False)
+            ),
+            images=list(kustomization.get("images") or []),
+        )
+
     def child(self, kustomization: dict, directory: Path) -> "_Context":
         options = kustomization.get("generatorOptions") or {}
         return replace(
@@ -252,6 +285,11 @@ class _Context:
             common_labels={
                 **self.common_labels,
                 **(kustomization.get("commonLabels") or {}),
+                # The modern `labels:` transformer. `includeSelectors` only
+                # controls whether the pairs are *also* written into selectors;
+                # metadata always gets them, which is all this renderer needs to
+                # model because the repositories' selectors are written by hand.
+                **_label_transformer_pairs(kustomization.get("labels")),
             },
             generator_labels={
                 **self.generator_labels,
@@ -500,20 +538,7 @@ def _render_directory(
         )
 
     context = (
-        _Context(
-            directory=directory,
-            namespace=kustomization.get("namespace", ""),
-            common_labels=dict(kustomization.get("commonLabels") or {}),
-            generator_labels=dict(
-                (kustomization.get("generatorOptions") or {}).get("labels") or {}
-            ),
-            disable_name_suffix_hash=bool(
-                (kustomization.get("generatorOptions") or {}).get(
-                    "disableNameSuffixHash", False
-                )
-            ),
-            images=list(kustomization.get("images") or []),
-        )
+        _Context.root(kustomization, directory)
         if parent is None
         else parent.child(kustomization, directory)
     )

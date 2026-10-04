@@ -17,24 +17,43 @@
 # ==============================================================================
 
 # Dockerfile for the Celery Worker Container (vision worker)
-# This image is optimized to run the heavy computation logic, consuming messages
-# from RabbitMQ and writing results to MinIO/Redis.
+# This image runs the heavy computation logic, consuming messages from RabbitMQ
+# and writing results to MinIO/Redis.
+#
+# Why this is a separate image from src/api/Dockerfile:
+#
+#   The worker imports `src.vision.service`, which imports `src.camera.schemas`,
+#   so it needs the deployment-side stack (pydantic, pydantic-settings,
+#   sqlalchemy, ...) ON TOP of the worker stack in requirements/vision.txt
+#   (celery, redis, kombu). src/api/Dockerfile installs only requirements/api.txt,
+#   which does not contain celery at all, so running the worker from that image
+#   dies with `exec: "celery": executable file not found in $PATH`.
+#
+#   Unioning requirements/api.txt with requirements/vision.txt is NOT a valid
+#   alternative: api.txt pins `onnxruntime==1.24.4` while vision.txt pins
+#   `onnxruntime-gpu==1.24.4`, and pip cannot satisfy both in one environment.
+#   The dependency sets are genuinely different, so the images differ too.
+#
+# Verify after building:
+#   docker run --rm --entrypoint sh industrial-cognition/vision:dev \
+#     -c 'command -v celery && python -c "import src.tasks.celery"'
+#
+# k8s/scripts/build-images.sh builds both images; see doc/k8s.md §2.
 
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Copy requirements files first
+# Copy requirements files first for build caching
 COPY requirements/vision.txt requirements/vision.txt
+COPY requirements/api.txt requirements/api.txt
 
-# Install dependencies
-RUN pip install --no-cache-dir -r requirements/vision.txt
+# Worker stack first, then the deployment-side stack the worker imports through.
+RUN pip install --no-cache-dir -r requirements/vision.txt \
+ && pip install --no-cache-dir -r requirements/api.txt
 
 # Copy the entire source code structure
 COPY src/ ./src/
 
-# Expose the internal port if needed, but generally, workers listen on broker ports.
-# We don't need to expose a port here as we communicate via the network, not HTTP.
-
-# Entrypoint will be managed by the celery command run via docker-compose/K8s
+# Entrypoint is managed by the celery command run via docker-compose/K8s
 CMD ["celery", "-A", "src.tasks.celery", "worker", "-l", "info"]

@@ -45,3 +45,17 @@ This list tracks all development tasks required to bring the system from bluepri
 * 🟡 Deployment Automation: Finalize Helm chart package for production deployment.
   Superseded in practice by the Kustomize overlays (`doc/k8s.md` §1 explains why Helm is deferred); revisit
   only if a Helm-native consumer appears.
+
+### **Stage 4: Tracked Issues (deferred until the MVP runs end to end)**
+
+* 🔴 **Object-storage backend: replace MinIO.** `minio/minio` and `minio/mc` no longer resolve on Docker Hub or
+  Quay (verified with `docker manifest inspect`; `alpine`/`redis`/`postgres`/`rabbitmq` all resolve, so it is
+  the upstream repository, not the network). The manifests currently use `bitnamilegacy/minio:latest`, an
+  explicitly unmaintained archive repository — a stopgap, not a target. Evaluate **SeaweedFS**, **Garage**,
+  **RustFS**, **Ceph RGW** or **Versity Gateway**, roughly in that order.
+  *Scope:* only `k8s/base/statefulset-minio.yaml`, the `minio-bucket-init` Job and the credential key names
+  change. The application contract is the S3 API plus `MINIO_ENDPOINT` / `MINIO_ACCESS_KEY` /
+  `MINIO_SECRET_KEY` / `MINIO_BUCKET_*`, so no service code is affected. See `doc/k8s.md` §2
+  "Object storage (S3)".
+* 🔴 **RabbitMQ HA.** The broker is a replicated-single StatefulSet. True multi-node clustering needs the
+  RabbitMQ Cluster Operator; see `doc/k8s.md` §2 "RabbitMQ clustering".

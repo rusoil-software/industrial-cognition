@@ -40,7 +40,9 @@ spec:
   accessModes:
     - ReadWriteOnce
   # Empty -> the cluster default. Overlays pin an explicit class.
-  storageClassName: ""
+  # Omitted on purpose = use the cluster default StorageClass. storageClassName: ""
+  # means NO class, which disables dynamic provisioning and leaves the claim
+  # Pending forever. Overlays pin an explicit class (model-cache-storage-class.yaml).
   resources:
     requests:
       storage: 6Gi

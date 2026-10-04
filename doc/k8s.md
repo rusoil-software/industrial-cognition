@@ -92,13 +92,61 @@ the manifests' contract.
 | `postgres` | StatefulSet | `postgres:15-alpine`               | 5432 | 1               | Detection results + metadata (Alembic-managed). |
 | `rabbitmq` | StatefulSet | `rabbitmq:3.13-management-alpine`  | 5672 / 15672 / 15692 | 1 | Priority queues, results queue, dead-letter queue. See the clustering note below. |
 | `redis`    | StatefulSet | `redis:7-alpine`                   | 6379 / 9121 | 1     | Celery result backend + state cache. |
-| `minio`    | StatefulSet | `minio/minio`                      | 9000 / 9001 | 4     | S3-compatible store for frames and inference results. |
+| `minio`    | StatefulSet | `bitnamilegacy/minio`              | 9000 / 9001 | 4     | S3-compatible store for frames and inference results. See "Object storage" below. |
 
 Why `camera` and `robot` reuse the `api` image: `src/api/Dockerfile` is the only Dockerfile that installs the
 full `src` tree with the API dependency set, and `doc/project-development.md` mandates that this Dockerfile
 stays the canonical one ("do not create others"). The two components are therefore deployed as the same
 image with a different `command`/`args` contract. When dedicated entrypoints are added later, only
 `images:` in `k8s/overlays/*/kustomization.yaml` needs to change.
+
+`vision` does **not** reuse the `api` image. `src/api/Dockerfile` installs only `requirements/api.txt`, which
+contains no `celery`, so a worker started from it dies with
+`exec: "celery": executable file not found in $PATH`. `src/vision/Dockerfile.worker` installs
+`requirements/vision.txt` *and* then `requirements/api.txt`, because the worker imports `src.vision.service`
+→ `src.camera.schemas`. The two files cannot simply be merged into one list: `api.txt` pins
+`onnxruntime==1.24.4` while `vision.txt` pins `onnxruntime-gpu==1.24.4`, and pip cannot satisfy both.
+`k8s/scripts/build-images.sh` builds both images.
+
+### Object storage (S3): why the image is not `minio/minio`
+
+`minio/minio` and `minio/mc` **no longer resolve** on Docker Hub or Quay. Verified with
+`docker manifest inspect`: both are `MISSING`, while `docker.io/library/alpine`, `redis:7-alpine`,
+`postgres:15-alpine` and `rabbitmq:3.13-management-alpine` all resolve — so it is the upstream repository
+disappearing, not the network, a rate limit or a wrong tag.
+
+The base manifest therefore uses the only pullable image found, `bitnamilegacy/minio:latest`, which ships both
+the server (`/opt/bitnami/minio/bin/minio`) and the client (`/opt/bitnami/minio-client/bin/mc`, already on
+`PATH`). That single image covers the StatefulSet *and* the `minio-bucket-init` Job. Two details are
+load-bearing:
+
+* The volume set must be a **positional argv**, not only `MINIO_VOLUMES`. `minio server` with no positional
+  volume argument fails with `FATAL Invalid command line arguments: use path style endpoint for single node
+  setup`, regardless of `MINIO_VOLUMES`. The manifest passes `"$(MINIO_VOLUMES)"` so the kubelet expands the
+  same variable the distributed (base) and single-node (dev overlay) forms both set.
+* The `mc` container must set `MC_CONFIG_DIR` to a writable path. `mc` persists alias state under `$HOME/.mc`,
+  which is read-only under `readOnlyRootFilesystem` + a non-root UID, producing
+  `Unable to save new mc config. open /.mc/...: read-only file system` on a loop and a Job that never
+  completes.
+
+> **Tracked issue — storage backend choice.** MinIO is no longer a safe dependency: the public images were
+> withdrawn, and `bitnamilegacy/*` is an explicitly unmaintained archive repository, so the fallback is a
+> stopgap, not a target. The application only needs an **S3-compatible API** (`MINIO_ENDPOINT`,
+> `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `MINIO_BUCKET_FRAMES`, `MINIO_BUCKET_RESULTS` in
+> `k8s/base/app-config.yaml`), so the decision is deliberately deferred until the MVP runs end to end.
+>
+> Candidates to evaluate, in the order they seem worth a spike:
+>
+> | Option | Why it is interesting |
+> | --- | --- |
+> | **SeaweedFS** | Mature, Apache-2.0, S3 gateway, runs happily in a single small pod, large contributor base. |
+> | **Garage** | Lightweight, geo-distributed by design, S3 API, single static Rust binary; good fit for an on-prem industrial server. |
+> | **RustFS** | Newer Rust S3 implementation; check project maturity/licence and operational track record first. |
+> | **Ceph (RADOS Gateway)** | The heavyweight, fully-featured answer; a large operational commitment for one industrial server. |
+> | **Versity Gateway** | S3 front-end over existing filesystem/tape; relevant only if the site already standardises on Versity. |
+>
+> Whichever is chosen, only `k8s/base/statefulset-minio.yaml`, the bucket-init Job and the credentials keys
+> need to change — no application code, because the contract is S3 and the endpoint is configuration.
 
 ### RabbitMQ clustering
 
@@ -178,9 +226,38 @@ Stateful components use `volumeClaimTemplates` so the PVC is bound to the pod id
 rescheduling — the previous manifests used bare `PersistentVolumeClaim` objects for Deployments, which do not
 survive a move between nodes and cannot be scaled.
 
-`storageClassName` is left empty so the cluster's default class is used. Production installs should set
-`storageClassName` explicitly (see the `prod` overlay patch) — e.g. a `fast-ssd` class for PostgreSQL and a
-`bulk` class for MinIO.
+### `storageClassName`: omit it, never set it to `""`
+
+The base manifests **omit** `storageClassName` so the cluster's default StorageClass provisions the volume.
+That is a load-bearing detail, not a style choice, and it cost a real debugging cycle on a live cluster:
+
+> Setting `storageClassName: ""` does **not** mean "use the default". It means "no class", which disables
+> dynamic provisioning entirely. Every claim then sits `Pending` forever with
+> `FailedBinding: no persistent volumes available for this claim and no storage class is set`, and because the
+> pods mount those claims, `postgres`, `rabbitmq`, `redis`, `minio` and the vision worker never schedule at
+> all.
+
+`tests/k8s` asserts this (`test_no_claim_disables_dynamic_provisioning`) so it cannot regress. The `prod`
+overlay adds the field explicitly to pin a class — e.g. `fast-ssd` for PostgreSQL/RabbitMQ/Redis and `bulk`
+for MinIO — and those names must be adjusted to the target cluster's own classes.
+
+Recovering a cluster that was already deployed with the empty string: the field is **immutable** on both a
+`PersistentVolumeClaim` and a StatefulSet's `volumeClaimTemplates`, so neither can be patched in place. The
+workload has to be recreated:
+
+```sh
+# 1. delete the StatefulSets FIRST, orphaning their pods so the kubelet releases
+#    the claims instead of fighting the controller
+kubectl -n cogni-ns delete statefulset postgres rabbitmq redis minio --cascade=orphan
+# 2. drain the pods, then the claims
+kubectl -n cogni-ns delete pods --all
+kubectl -n cogni-ns delete pvc --all          # retry if one is stuck Terminating
+# 3. recreate from the corrected manifests
+kubectl apply -k k8s/overlays/dev
+```
+
+Deleting a claim *while its StatefulSet still exists* leaves the controller unable to recreate it, and a claim
+still mounted by a running pod stays `Terminating` indefinitely — which is why the order above matters.
 
 ### The OWLv2 model
 
@@ -193,9 +270,9 @@ model can never be part of the repository manifest set. Choose one of:
 2. **Populated PVC** (default here): upload the model once into the `industrial-cognition-model-cache` PVC
    (`kubectl cp` via a helper pod, or `mc cp` from MinIO), then the read-only mount is enough.
 
-`k8s/overlays/prod` ships an optional `patches/model-cache-init.yaml` that swaps the read-only mount for an
-`initContainer` which downloads the model from the `results` MinIO bucket before the worker starts. Enable it
-by adding the patch to the overlay's `kustomization.yaml`.
+Without either, the vision worker starts but `VisionService.load_model()` finds no artifact. The worker is a
+Celery consumer, so it stays `Running` and only fails when a task arrives — check
+`kubectl -n cogni-ns exec deploy/vision -- ls -l /app/models` after a model rollout.
 
 ---
 

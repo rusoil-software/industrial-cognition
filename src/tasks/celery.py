@@ -24,6 +24,7 @@
 import os
 
 from celery import Celery
+from kombu import Queue
 
 # Connection settings come from the environment so that the same image runs
 # unchanged under docker-compose (service names `rabbitmq`/`redis`) and under
@@ -37,12 +38,21 @@ CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/0
 # Queue contract shared with the deployment manifests: the work queue, the
 # priority queue used for urgent frames, the results queue and the dead-letter
 # queue named in the architecture diagram.
+#
+# These must be `kombu.Queue` instances, not bare strings. Celery builds
+# `self.Queues(self.app.conf.task_queues)` and then does
+# `{q.name: q for q in queues}`; a string has no `.name`, so the worker dies with
+# `AttributeError: 'str' object has no attribute 'name'` during `setup_queues`,
+# before it contacts the broker at all.
 CELERY_TASK_QUEUES = [
-    queue.strip()
-    for queue in os.getenv(
-        "CELERY_QUEUES", "vision,vision.priority,vision.results,vision.dlq"
-    ).split(",")
-    if queue.strip()
+    Queue(name)
+    for name in (
+        queue.strip()
+        for queue in os.getenv(
+            "CELERY_QUEUES", "vision,vision.priority,vision.results,vision.dlq"
+        ).split(",")
+    )
+    if name
 ]
 
 # Initialize Celery app (broker/backend overridable via environment variables)

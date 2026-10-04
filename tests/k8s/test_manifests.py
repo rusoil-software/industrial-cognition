@@ -394,6 +394,33 @@ def _init_containers(workload: RenderedObject) -> list[dict]:
     return list(workload.document["spec"]["template"]["spec"].get("initContainers") or [])
 
 
+def test_no_claim_disables_dynamic_provisioning(rendered: list[RenderedObject]) -> None:
+    """`storageClassName: ""` is not "use the default" - it is "no class".
+
+    Regression test for a bug that only a real cluster exposes: an empty string
+    disables dynamic provisioning, so every claim sat `Pending` forever on
+    `FailedBinding: no persistent volumes available for this claim and no storage
+    class is set`, and because the pods mount those claims,
+    `postgres`/`rabbitmq`/`redis`/`minio` and the vision worker never scheduled.
+
+    Omitting the field is what selects the default StorageClass; an overlay that
+    wants an explicit class names one.
+    """
+    claims: list[tuple[str, dict]] = []
+    for obj in objects_of(rendered, "PersistentVolumeClaim"):
+        claims.append((obj.name, obj.document["spec"]))
+    for obj in objects_of(rendered, "StatefulSet"):
+        for template in obj.document["spec"].get("volumeClaimTemplates") or []:
+            claims.append((f"{obj.name}/{template['metadata']['name']}", template["spec"]))
+
+    assert claims, "no persistent volume claims were found; did the templates move?"
+    for name, spec in claims:
+        assert "storageClassName" not in spec or spec["storageClassName"] != "", (
+            f"{name} sets storageClassName to the empty string, which disables "
+            "dynamic provisioning; omit the field to use the cluster default"
+        )
+
+
 def test_every_pod_runs_as_non_root(rendered: list[RenderedObject]) -> None:
     for obj in rendered:
         if obj.kind not in WORKLOAD_KINDS:
