@@ -1,0 +1,105 @@
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# author : Konstantin Ustiuzhanin
+# ==============================================================================
+#
+# Validates every Kustomize overlay. A malformed manifest cannot merge: the
+# render is checked with the real `kubectl kustomize`, the result is schema
+# checked with kubeconform, and the repo-native contract tests in tests/k8s run
+# as well. No cluster is required - every step is offline.
+#
+# See doc/k8s.md §11.
+
+name: K8s Manifests
+
+on:
+  push:
+    branches: [main, develop, master]
+    paths:
+      - "k8s/**"
+      - "tests/k8s/**"
+      - "requirements/k8s.txt"
+      - ".github/workflows/k8s/**"
+  pull_request:
+    branches: [main, develop, master]
+    paths:
+      - "k8s/**"
+      - "tests/k8s/**"
+      - "requirements/k8s.txt"
+      - ".github/workflows/k8s/**"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  KUBECONFORM_VERSION: v0.6.7
+  KUBECTL_VERSION: v1.29.8
+
+jobs:
+  validate:
+    name: Render, schema-check and contract-test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install kubectl
+        run: |
+          curl -fsSLo /usr/local/bin/kubectl \
+            "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          chmod +x /usr/local/bin/kubectl
+          kubectl version --client
+
+      - name: Install kubeconform
+        run: |
+          curl -fsSL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            | tar -xz -C /usr/local/bin kubeconform
+          kubeconform -v
+
+      - name: Install test dependencies
+        run: pip install -r requirements/k8s.txt
+
+      # Renders every overlay (kubectl kustomize), schema-checks it with
+      # kubeconform, then runs pytest tests/k8s. The script fails loudly if a
+      # layer is unavailable rather than silently skipping it - see its header.
+      - name: Validate manifests
+        run: |
+          chmod +x k8s/scripts/validate.sh
+          ./k8s/scripts/validate.sh
+
+      - name: Upload rendered manifests
+        if: always()
+        run: |
+          mkdir -p reports/k8s
+          for overlay in dev prod; do
+            kubectl kustomize "k8s/overlays/${overlay}" >"reports/k8s/${overlay}.yaml" || true
+          done
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rendered-k8s-manifests
+          path: reports/k8s/
+          if-no-files-found: warn

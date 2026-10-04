@@ -1,0 +1,45 @@
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# author : Konstantin Ustiuzhanin
+# ==============================================================================
+#
+# Shared model cache for the OWLv2 ONNX artifact.
+#
+# The artifact is ~300 MB and deliberately git-ignored (`src/owl/models/**`), so
+# it is never part of the manifest set. Populate the volume once out-of-band
+# (see doc/k8s.md §4); every `vision` replica mounts it read-only.
+#
+# accessModes is ReadWriteOnce because that is the only mode every CSI driver
+# supports. A cluster whose default class offers ReadWriteMany can switch the
+# mode in an overlay, which then also allows `vision` to scale past one replica
+# without node affinity.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: industrial-cognition-model-cache
+  namespace: cogni-ns
+  labels:
+    app.kubernetes.io/name: industrial-cognition
+    app.kubernetes.io/component: model-cache
+    app.kubernetes.io/part-of: industrial-cognition
+spec:
+  accessModes:
+    - ReadWriteOnce
+  # Empty -> the cluster default. Overlays pin an explicit class.
+  storageClassName: ""
+  resources:
+    requests:
+      storage: 6Gi

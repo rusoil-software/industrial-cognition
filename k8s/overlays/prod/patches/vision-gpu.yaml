@@ -1,0 +1,63 @@
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# author : Konstantin Ustiuzhanin
+# ==============================================================================
+#
+# Production overlay: move the vision workers onto the GPU node pool.
+#
+# The base Deployment carries the whole GPU block as a comment and defaults
+# `OWL2_EXECUTION_PROVIDER` to `CPUExecutionProvider`, so a CPU-only cluster
+# works out of the box. This patch is what actually enables accelerated
+# inference (doc/vision.md: "Hardware Dependence: requires NVIDIA GPUs to meet
+# latency targets").
+#
+# Requirements on the cluster:
+#   * NVIDIA device plugin (exposes the `nvidia.com/gpu` resource),
+#   * nodes labelled `nvidia.com/gpu.present=true` and tainted
+#     `nvidia.com/gpu=:NoSchedule` (the GKE/EKS/AKS convention; the toleration is
+#     harmless if the nodes are untainted),
+#   * `onnxruntime-gpu` inside the image (requirements/gpu.txt).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vision
+  namespace: cogni-ns
+spec:
+  template:
+    spec:
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: vision
+          env:
+            # Index 11 is the OWL2_EXECUTION_PROVIDER override declared last in
+            # the base Deployment. Keeping the override here (rather than only
+            # in the ConfigMap) means the GPU provider and the GPU node selector
+            # can never drift apart.
+            - name: OWL2_EXECUTION_PROVIDER
+              value: CUDAExecutionProvider
+          resources:
+            requests:
+              cpu: "1"
+              memory: 4Gi
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: 8Gi
+              nvidia.com/gpu: "1"

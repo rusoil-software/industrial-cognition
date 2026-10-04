@@ -1,0 +1,29 @@
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# author : Konstantin Ustiuzhanin
+# ==============================================================================
+#
+# Production overlay: the real public hostname.
+#
+# The base uses `mvm.example.com` so that a render is valid and obviously a
+# placeholder. Replace both the host and the TLS secret name with the
+# installation's own values; the certificate itself is issued out of band
+# (cert-manager, or a Secret copied into `cogni-ns`).
+- op: replace
+  path: /spec/tls/0/hosts/0
+  value: mvm.rusoil.example
+- op: replace
+  path: /spec/rules/0/host
+  value: mvm.rusoil.example

@@ -1,0 +1,131 @@
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# author : Konstantin Ustiuzhanin
+# ==============================================================================
+#
+# Prometheus configuration.
+#
+# Scrape strategy:
+#   * `kubernetes-pods` discovers every pod in this namespace that carries the
+#     `prometheus.io/scrape: "true"` annotation. That annotation is already set
+#     by the base Deployments, so application metrics are picked up as soon as
+#     the services expose an endpoint - no Prometheus change required.
+#   * `kubernetes-services` does the same for annotated Services.
+#   * `rabbitmq` scrapes the broker's built-in Prometheus plugin (enabled in
+#     statefulset-rabbitmq.yaml), which is the only data service that ships
+#     metrics out of the box.
+#
+# The architecture diagram also lists Redis, MinIO and per-service latency
+# histograms. Those endpoints are *not* implemented yet (doc/tasklist.md Stage 3
+# "Observability Integration"); the commented jobs below are the exact targets
+# to enable once the instrumentation lands, so this file does not have to
+# change shape later.
+#
+# Neither `kubernetes_sd_configs` nor `honor_labels` reference a CRD, so a plain
+# Prometheus server is enough - no Prometheus Operator is required.
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 30s
+  external_labels:
+    cluster: industrial-cognition
+    environment: production
+
+rule_files:
+  - /etc/prometheus/rules/*.rules.yml
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: kubernetes-pods
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [cogni-ns]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+        action: keep
+        regex: "true"
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scheme]
+        action: replace
+        target_label: __scheme__
+        regex: (https?)
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+        action: replace
+        target_label: __metrics_path__
+        regex: (.+)
+      - source_labels:
+          [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+        action: replace
+        regex: ([^:]+)(?::\d+)?;(\d+)
+        replacement: $1:$2
+        target_label: __address__
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]
+        action: replace
+        target_label: component
+      - source_labels: [__meta_kubernetes_pod_name]
+        action: replace
+        target_label: pod
+      - source_labels: [__meta_kubernetes_namespace]
+        action: replace
+        target_label: namespace
+
+  - job_name: kubernetes-services
+    kubernetes_sd_configs:
+      - role: service
+        namespaces:
+          names: [cogni-ns]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+        action: keep
+        regex: "true"
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_path]
+        action: replace
+        target_label: __metrics_path__
+        regex: (.+)
+      - source_labels:
+          [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
+        action: replace
+        regex: ([^:]+)(?::\d+)?;(\d+)
+        replacement: $1:$2
+        target_label: __address__
+      - source_labels: [__meta_kubernetes_service_name]
+        action: replace
+        target_label: service
+
+  - job_name: rabbitmq
+    static_configs:
+      - targets: ["rabbitmq:15692"]
+        labels:
+          component: rabbitmq
+
+  # --- Enable with the Stage 3 instrumentation work -------------------------
+  # - job_name: minio
+  #   metrics_path: /minio/v2/metrics/cluster
+  #   static_configs:
+  #     - targets: ["minio:9000"]
+  #       labels: { component: minio }
+  #
+  # - job_name: redis
+  #   static_configs:
+  #     - targets: ["redis-exporter:9121"]
+  #       labels: { component: redis }
+  #
+  # - job_name: vision-worker
+  #   static_configs:
+  #     - targets: ["vision.cogni-ns.svc.cluster.local:9100"]
+  #       labels: { component: vision }

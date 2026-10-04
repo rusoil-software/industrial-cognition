@@ -1,0 +1,87 @@
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# author : Konstantin Ustiuzhanin
+# ==============================================================================
+#
+# Production overlay: full architecture parity and a hardened namespace.
+#
+#   * Distributed MinIO (4 servers) and the base broker topology are inherited.
+#   * Monitoring is ON (Prometheus + Grafana + Loki + Alloy).
+#   * Replica ceilings, storage classes and the namespace quota are raised.
+#   * Network segmentation is ON (default-deny + explicit allows).
+#   * The edge node selectors and /dev devices are patched onto `camera` and
+#     `robot`, because only those nodes own the capture card and the RS-485
+#     adapter. GPU scheduling is patched onto the vision workers.
+#
+# Apply with: `kubectl apply -k k8s/overlays/prod`
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: cogni-ns
+
+commonLabels:
+  app.kubernetes.io/part-of: industrial-cognition
+
+resources:
+  - ../../base
+  # Autoscaling, disruption budgets, the namespace quota and network
+  # segmentation are production concerns. The dev overlay omits them because a
+  # development cluster usually has no metrics-server, is drained by nobody, and
+  # cannot reach the physical RTSP/Modbus network anyway.
+  - autoscaling.yaml
+  - availability.yaml
+  - networkpolicy.yaml
+  # CPU-based autoscaling for `vision`. Mutually exclusive with
+  # ../../components/keda below - enable exactly one of the two.
+  - hpa-vision-cpu.yaml
+
+components:
+  - ../../components/monitoring
+  # Queue-depth autoscaling for the vision workers, replacing hpa-vision-cpu.yaml.
+  # Opt-in, because it requires the KEDA operator and its CRDs to be present -
+  # without them the apply fails. Enabling it means deleting the
+  # `hpa-vision-cpu.yaml` line from `resources` above, since one Deployment must
+  # have exactly one controller writing `spec.replicas`.
+  #
+  #   - ../../components/keda
+
+images:
+  - name: industrial-cognition/api
+    newTag: latest
+  - name: industrial-cognition/vision
+    newTag: latest
+
+patches:
+  # --- Storage classes -----------------------------------------------------
+  # Empty `storageClassName` means "cluster default"; production pinning is
+  # explicit so a default-class change cannot silently move the database onto a
+  # different tier. ADJUST `fast-ssd`/`bulk` to the cluster's own classes.
+  - target: { kind: StatefulSet, name: postgres }
+    path: patches/postgres-storage-class.yaml
+  - target: { kind: StatefulSet, name: rabbitmq }
+    path: patches/rabbitmq-storage-class.yaml
+  - target: { kind: StatefulSet, name: redis }
+    path: patches/redis-storage-class.yaml
+  - target: { kind: StatefulSet, name: minio }
+    path: patches/minio-storage-class.yaml
+  - target: { kind: PersistentVolumeClaim, name: industrial-cognition-model-cache }
+    path: patches/model-cache-storage-class.yaml
+  # --- Public hostname -----------------------------------------------------
+  - target: { kind: Ingress, name: industrial-cognition }
+    path: patches/ingress-host.yaml
+  # --- Edge placement for device-owning workloads ---------------------------
+  - path: patches/edge-devices.yaml
+  # --- GPU inference -------------------------------------------------------
+  - path: patches/vision-gpu.yaml

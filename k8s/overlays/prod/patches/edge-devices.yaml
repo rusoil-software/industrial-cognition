@@ -1,0 +1,81 @@
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# author : Konstantin Ustiuzhanin
+# ==============================================================================
+#
+# Production overlay: give the device-owning workloads their devices.
+#
+# The base Deployments are deliberately device-free so that `k8s/base` renders
+# and schedules on any cluster. A real installation knows which node owns the
+# capture card and the RS-485 adapter, so those host paths are attached here.
+#
+# PREREQUISITES on the target nodes:
+#   * camera node:  /dev/video0 exists and its group matches `supplementalGroups`
+#                   (44 = `video` on Debian/Ubuntu). Verify with
+#                   `stat -c '%g' /dev/video0`.
+#   * robot node:   /dev/ttyUSB0 exists and its group matches (20 = `dialout`).
+#                   Verify with `stat -c '%g' /dev/ttyUSB0`.
+#   * Both:         `industrial-cognition/role: edge` node label, which the base
+#                   Deployment already selects on.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: camera
+  namespace: cogni-ns
+spec:
+  template:
+    spec:
+      containers:
+        - name: camera
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: shm, mountPath: /dev/shm }
+            - { name: video, mountPath: /dev/video0 }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi
+        - name: video
+          hostPath:
+            path: /dev/video0
+            type: CharDevice
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: robot
+  namespace: cogni-ns
+spec:
+  template:
+    spec:
+      containers:
+        - name: robot
+          env:
+            - name: MODBUS_DEVICE
+              value: /dev/ttyUSB0
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: serial, mountPath: /dev/ttyUSB0 }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: serial
+          hostPath:
+            path: /dev/ttyUSB0
+            type: CharDevice

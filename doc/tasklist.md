@@ -21,7 +21,9 @@ This list tracks all development tasks required to bring the system from bluepri
 
 ### **Stage 1: Foundational Infrastructure (NEXT FOCUS AREA)**
 
-* 🟡 Setup K8s Manifests: Create base Deployment/Service/ConfigMap templates for all microservices.
+* ✅ Setup K8s Manifests: Kustomize `base` + `dev`/`prod` overlays covering every microservice, the data
+  services, networking, autoscaling and the optional observability/KEDA components. Rendered and
+  contract-tested by `tests/k8s` and `.github/workflows/k8s/validate.yaml`; documented in `doc/k8s.md`.
 * 🟡 Database Schema Migration: Run initial Alembic migrations to create all necessary tables (`detection_results`, `system_metadata`).
 * 🟡 Base Dependency Management: Finalize `requirements/prod.txt` based on base dependencies.
 
@@ -36,4 +38,10 @@ This list tracks all development tasks required to bring the system from bluepri
 
 * 🟡 End-to-End Testing: Write and execute full integration tests covering the entire pipeline (Camera -> Vision -> Modbus).
 * 🟡 Observability Integration: Hook up Prometheus metrics scraping endpoints to all service checkpoints.
+  The Kubernetes side is already in place (`k8s/components/monitoring` scrapes the
+  `prometheus.io/scrape` annotations on every Deployment); what remains is the `/metrics` endpoint itself in
+  the FastAPI app and the vision worker, plus a Redis exporter for `redis_exporter`. The commented jobs in
+  `k8s/components/monitoring/prometheus/prometheus.yml` are the exact targets to enable.
 * 🟡 Deployment Automation: Finalize Helm chart package for production deployment.
+  Superseded in practice by the Kustomize overlays (`doc/k8s.md` §1 explains why Helm is deferred); revisit
+  only if a Helm-native consumer appears.

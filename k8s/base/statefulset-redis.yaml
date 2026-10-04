@@ -1,0 +1,155 @@
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# author : Konstantin Ustiuzhinin
+# ==============================================================================
+#
+# Redis - Celery result backend and short-lived pipeline state.
+#
+# Stateful because the append-only file must follow the pod identity. A single
+# primary is sufficient for the documented workload (results + state cache);
+# Sentinel/Cluster is intentionally out of scope (doc/vision.md "Scaling:
+# Current Prototype - single-instance deployment").
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: cogni-ns
+  labels:
+    app.kubernetes.io/name: industrial-cognition
+    app.kubernetes.io/component: redis
+spec:
+  type: ClusterIP
+  ports:
+    - { name: redis, port: 6379, targetPort: redis, protocol: TCP }
+    # A `metrics` port is deliberately absent: redis:7-alpine does not serve
+    # /metrics, and the previous manifest advertised port 8001 (an
+    # Ollama/export default) that nothing in this project listens on. The
+    # observability component scrapes Redis once Stage 3 "Observability
+    # Integration" adds an exporter sidecar - see doc/tasklist.md.
+  selector:
+    app.kubernetes.io/name: industrial-cognition
+    app.kubernetes.io/component: redis
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: cogni-ns
+  labels:
+    app.kubernetes.io/name: industrial-cognition
+    app.kubernetes.io/component: redis
+    app.kubernetes.io/part-of: industrial-cognition
+spec:
+  serviceName: redis
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: industrial-cognition
+      app.kubernetes.io/component: redis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: industrial-cognition
+        app.kubernetes.io/component: redis
+        app.kubernetes.io/part-of: industrial-cognition
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "6379"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: data-services
+      automountServiceAccountToken: false
+      priorityClassName: industrial-cognition-critical
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        # The official Alpine image ships a `redis` user at UID/GID 999.
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - >-
+              exec redis-server
+              --dir /data
+              --appendonly yes
+              --appendfsync everysec
+              --maxmemory 1gb
+              --maxmemory-policy allkeys-lru
+              --maxmemory-samples 5
+              --save 900 1
+              --requirepass "$REDIS_PASSWORD"
+          ports:
+            - { name: redis, containerPort: 6379, protocol: TCP }
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: industrial-cognition-secrets, key: REDIS_PASSWORD }
+          startupProbe:
+            exec:
+              command: ["/bin/sh", "-c", 'redis-cli -a "$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG']
+            periodSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            exec:
+              command: ["/bin/sh", "-c", 'redis-cli -a "$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG']
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 5
+          readinessProbe:
+            tcpSocket:
+              port: redis
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/name: industrial-cognition
+          app.kubernetes.io/component: redis
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: ""
+        resources:
+          requests:
+            storage: 10Gi

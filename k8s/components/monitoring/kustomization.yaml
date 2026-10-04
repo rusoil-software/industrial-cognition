@@ -1,0 +1,109 @@
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# author : Konstantin Ustiuzhanin
+# ==============================================================================
+#
+# Optional observability component: Prometheus + Grafana + Loki + Alloy.
+#
+# Add it to an overlay with:
+#
+#   components:
+#     - ../../components/monitoring
+#
+# A Kustomize *component* (not a base) because it is genuinely optional and must
+# be composable into several overlays while still being able to patch the
+# objects it depends on - `patches` is a component-only capability, and it is
+# what lets this file add the `/grafana` and `/minio` ingress paths without
+# duplicating the whole Ingress.
+#
+# Note on the datasource URL: `grafana/datasources.yaml` points at
+# `http://prometheus.cogni-ns.svc.cluster.local:9090`, the in-cluster Service
+# name. Kustomize `replacements` cannot rewrite a value embedded inside a YAML
+# string without also destroying the rest of the file (its `delimiter` option
+# replaces everything after the delimiter), so the URL is a plain literal. An
+# environment that renames the namespace overrides it with a `patches` entry in
+# its own overlay.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+resources:
+  - prometheus/statefulset.yaml
+  - grafana/statefulset.yaml
+  - loki/statefulset.yaml
+  - alloy/daemonset.yaml
+
+generatorOptions:
+  # Deployments and StatefulSets reference these ConfigMaps by their bare name
+  # (there is no Kustomize `nameReference` for a `configMap` volume, and no
+  # hash-aware consumer here), so the content hash must not be appended.
+  disableNameSuffixHash: true
+  labels:
+    app.kubernetes.io/name: industrial-cognition
+    app.kubernetes.io/part-of: industrial-cognition
+
+configMapGenerator:
+  - name: prometheus-config
+    files:
+      - prometheus/prometheus.yml
+  - name: prometheus-rules
+    files:
+      - prometheus/rules/industrial-cognition.rules.yml
+  - name: loki-config
+    files:
+      - loki/loki-config.yaml
+  # Files are renamed on mount because Grafana scans single directories for both
+  # datasource and provider definitions: the dashboard JSON must keep its `.json`
+  # name, so the provider file is mounted as `provider.yaml`.
+  - name: grafana-datasources
+    files:
+      - datasources.yaml=grafana/datasources.yaml
+  - name: grafana-dashboard-provider
+    files:
+      - provider.yaml=grafana/provider.yaml
+  - name: grafana-dashboards
+    files:
+      - industrial-cognition-overview.json=grafana/dashboards/industrial-cognition-overview.json
+
+# Expose Grafana and the MinIO console on the shared Ingress without restating
+# the whole object.
+patches:
+  - target:
+      kind: Ingress
+      name: industrial-cognition
+    patch: |-
+      - op: add
+        path: /spec/rules/0/http/paths/-
+        value:
+          path: /grafana
+          pathType: Prefix
+          backend:
+            service:
+              name: grafana
+              port:
+                name: http
+  - target:
+      kind: Ingress
+      name: industrial-cognition
+    patch: |-
+      - op: add
+        path: /spec/rules/0/http/paths/-
+        value:
+          path: /minio
+          pathType: Prefix
+          backend:
+            service:
+              name: minio
+              port:
+                name: console

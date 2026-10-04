@@ -1,41 +1,79 @@
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# author : Konstantin Ustiuzhanin
+# ==============================================================================
+#
+# North/south entry point for the MVM control panel and the robot telemetry
+# stream.
+#
+# The previous manifest declared a second `industrial-cognition-api` Service
+# inside this file, which collided with the one in deployment-api.yaml and
+# targeted port 8080 - a port nothing in the project listens on. There is now
+# exactly one `api` Service, created alongside its Deployment.
+#
+# WebSocket note: `/ws/detections` is long-lived and continuous, so proxy
+# buffering is disabled and the read timeout is raised to an hour. Without both
+# annotations nginx-ingress buffers the frames and the client sees 502s.
+---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: industrial-cognition-ingress
+  name: industrial-cognition
+  namespace: cogni-ns
   labels:
-    app: industrial-cognition
+    app.kubernetes.io/name: industrial-cognition
+    app.kubernetes.io/component: ingress
+    app.kubernetes.io/part-of: industrial-cognition
   annotations:
-  # Example annotation for using Nginx Ingress Controller
-  nginx.ingress.kubernetes.io/rewrite-target: /
-  # Add any required ingress controller class name here
-  kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "64m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    # The WebSocket upgrade needs a 1.1 client and no connection pinning.
+    nginx.ingress.kubernetes.io/websocket-services: "api"
 spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - mvm.example.com
+      secretName: industrial-cognition-tls
   rules:
-  - host: api.industrial-cognition.com # Change this to the actual FQDN
-    http:
-      paths:
-      - path: /v1/
-        pathType: Prefix
-        backend:
-          service:
-            name: industrial-cognition-api # Must match the deployed API service name
-            port:
-              number: 80 # Assuming the API service exposes traffic on port 80/8080
----
-# Optional: Service for the API if it's not exposed via a standard service type
-apiVersion: v1
-kind: Service
-metadata:
-  name: industrial-cognition-api
-  labels:
-    app: industrial-cognition
-    component: api
-spec:
-  type: ClusterIP
-  ports:
-  - port: 80
-    targetPort: 8080 # Assuming the FastAPI runs on 8080 internally
-    name: http
-  selector:
-    app: industrial-cognition
-    component: api
+    - host: mvm.example.com
+      http:
+        paths:
+          # Longest prefix wins in nginx-ingress, so the WebSocket path is
+          # matched before the catch-all.
+          - path: /ws
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  name: http
+          - path: /health
+            pathType: Exact
+            backend:
+              service:
+                name: api
+                port:
+                  name: http
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  name: http

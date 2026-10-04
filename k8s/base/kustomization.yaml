@@ -1,0 +1,73 @@
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# author : Konstantin Ustiuzhanin
+# ==============================================================================
+#
+# Kustomize base for the Industrial Cognition platform.
+#
+# `k8s/base` renders on its own, but it is meant to be consumed through an
+# overlay (`kubectl apply -k k8s/overlays/<env>`) because the environments pin
+# image tags, storage classes, replica counts and the optional monitoring
+# component. See doc/k8s.md.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: cogni-ns
+
+commonLabels:
+  app.kubernetes.io/part-of: industrial-cognition
+
+# `autoscaling.yaml`, `availability.yaml` and `networkpolicy.yaml` live under
+# `k8s/overlays/prod/` rather than here: they are policy objects whose
+# correctness depends on the production topology (metrics-server present, nodes
+# drainable, the physical RTSP/Modbus network reachable). The `dev` overlay
+# omits them so that a laptop cluster boots without a metrics-server and without
+# network policies that would black-hole the pipeline. See doc/k8s.md §7 and §6.
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml
+  - app-config.yaml
+  - storage.yaml
+  - statefulset-postgres.yaml
+  - statefulset-rabbitmq.yaml
+  - statefulset-redis.yaml
+  - statefulset-minio.yaml
+  - deployment-api.yaml
+  - deployment-camera.yaml
+  - deployment-vision.yaml
+  - deployment-robot.yaml
+  - ingress.yaml
+
+generatorOptions:
+  # The Deployments reference these objects by name, so the content hash must
+  # not be appended.
+  disableNameSuffixHash: true
+  labels:
+    app.kubernetes.io/name: industrial-cognition
+    app.kubernetes.io/part-of: industrial-cognition
+
+secretGenerator:
+  # Development defaults; see the warning at the top of secrets.env and
+  # doc/k8s.md §5 for the production override procedure.
+  - name: industrial-cognition-secrets
+    envs:
+      - secrets.env
+
+images:
+  # Overlays replace `newTag` with an immutable build identifier.
+  - name: industrial-cognition/api
+    newTag: latest
+  - name: industrial-cognition/vision
+    newTag: latest

@@ -1,0 +1,218 @@
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# author : Konstantin Ustiuzhanin
+# ==============================================================================
+#
+# Network segmentation. The namespace is default-deny for both directions; the
+# policies below are the complete allow-list.
+#
+# Rationale (architecture diagram): "network policies restricting traffic to
+# RTSP, AMQP and HTTPS". Note that NetworkPolicy is enforced by the CNI, not by
+# the API server, so these objects are inert on a CNI without policy support
+# (e.g. plain flannel) - they exist so that a policy-capable CNI (Calico,
+# Cilium) locks the namespace down without further work.
+---
+# 1. Everything is denied unless a later policy allows it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: cogni-ns
+  labels:
+    app.kubernetes.io/name: industrial-cognition
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+# 2. DNS resolution is required by every pod.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: cogni-ns
+  labels:
+    app.kubernetes.io/name: industrial-cognition
+spec:
+  podSelector: {}
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+# 3. Prometheus may scrape every pod in the namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-prometheus-scrape
+  namespace: cogni-ns
+  labels:
+    app.kubernetes.io/name: industrial-cognition
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: prometheus
+---
+# 4. The ingress controller (in its own namespace) reaches the API.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-api
+  namespace: cogni-ns
+  labels:
+    app.kubernetes.io/name: industrial-cognition
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: api
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - { protocol: TCP, port: 8000 }
+---
+# 5. Application workloads -> data services.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-data-service-access
+  namespace: cogni-ns
+  labels:
+    app.kubernetes.io/name: industrial-cognition
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: ["postgres", "rabbitmq", "redis", "minio"]
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: ["api", "camera", "vision", "robot", "minio-bucket-init"]
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: ["postgres", "rabbitmq", "redis", "minio"]
+      ports:
+        - { protocol: TCP, port: 5432 }
+        - { protocol: TCP, port: 5672 }
+        - { protocol: TCP, port: 6379 }
+        - { protocol: TCP, port: 9000 }
+        - { protocol: TCP, port: 9001 }
+        - { protocol: TCP, port: 4369 }
+        - { protocol: TCP, port: 25672 }
+---
+# 6. RabbitMQ Prometheus endpoint and MinIO console are also reachable by
+#    Prometheus (already covered by policy 3) - that policy is namespace-wide,
+#    so nothing further is required.
+#
+# 7. West/east egress for the application pods.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-app-egress
+  namespace: cogni-ns
+  labels:
+    app.kubernetes.io/name: industrial-cognition
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: ["api", "camera", "vision", "robot"]
+  policyTypes: ["Egress"]
+  egress:
+    # Data services inside the namespace.
+    - to:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: ["postgres", "rabbitmq", "redis", "minio"]
+      ports:
+        - { protocol: TCP, port: 5432 }
+        - { protocol: TCP, port: 5672 }
+        - { protocol: TCP, port: 6379 }
+        - { protocol: TCP, port: 9000 }
+        - { protocol: TCP, port: 9001 }
+    # RTSP camera streams and the Modbus TCP fallback live outside the cluster
+    # (the physical workcell network).
+    - to:
+        - ipBlock:
+            cidr: 192.168.0.0/16
+      ports:
+        - { protocol: TCP, port: 554 }
+        - { protocol: TCP, port: 8554 }
+        - { protocol: TCP, port: 502 }
+        - { protocol: UDP, port: 554 }
+        - { protocol: UDP, port: 502 }
+    # Object storage may also be an external S3 endpoint.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.0.0/16
+      ports:
+        - { protocol: TCP, port: 443 }
+---
+# 8. Data services need outbound access to each other and to DNS only; keep
+#    their egress inside the namespace (plus DNS from policy 2).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-data-egress
+  namespace: cogni-ns
+  labels:
+    app.kubernetes.io/name: industrial-cognition
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: ["postgres", "rabbitmq", "redis", "minio"]
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: ["postgres", "rabbitmq", "redis", "minio"]
+      ports:
+        - { protocol: TCP, port: 5432 }
+        - { protocol: TCP, port: 5672 }
+        - { protocol: TCP, port: 6379 }
+        - { protocol: TCP, port: 9000 }
+        - { protocol: TCP, port: 4369 }
+        - { protocol: TCP, port: 25672 }

@@ -1,119 +1,180 @@
-# API Service Deployment
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# author : Konstantin Ustiuzhanin
+# ==============================================================================
+#
+# FastAPI gateway (`src/api/main.py`): REST control plane (`/health`) and the
+# WebSocket telemetry stream (`/ws/detections`).
+#
+# Stateless -> scales horizontally behind the `api` Service. Only configuration
+# and credentials are injected; no persistent volume is mounted.
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: industrial-cognition-api
+  name: api
+  namespace: cogni-ns
   labels:
-    app: industrial-cognition
-    component: api
+    app.kubernetes.io/name: industrial-cognition
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: industrial-cognition
 spec:
-  replicas: 1
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
-      app: industrial-cognition
-      component: api
+      app.kubernetes.io/name: industrial-cognition
+      app.kubernetes.io/component: api
   template:
     metadata:
       labels:
-        app: industrial-cognition
-        component: api
+        app.kubernetes.io/name: industrial-cognition
+        app.kubernetes.io/component: api
+        app.kubernetes.io/part-of: industrial-cognition
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
     spec:
+      serviceAccountName: api
+      automountServiceAccountToken: false
+      priorityClassName: industrial-cognition-standard
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: industrial-cognition
+              app.kubernetes.io/component: api
       containers:
-      - name: api
-        image: industrial-cognition/api:latest
-        imagePullPolicy: Always
-        ports:
-        - containerPort: 8000
-          name: http
-          protocol: TCP
-        - containerPort: 8001
-          name: websocket
-          protocol: TCP
-        env:
-        - name: DATABASE_URL
-          valueFrom:
-            configMapKeyRef:
-              name: industrial-cognition-config
-              key: DATABASE_URL
-        - name: RABBITMQ_URL
-          valueFrom:
-            configMapKeyRef:
-              name: industrial-cognition-config
-              key: RABBITMQ_URL
-        - name: MINIO_ENDPOINT
-          valueFrom:
-            configMapKeyRef:
-              name: industrial-cognition-config
-              key: MINIO_ENDPOINT
-        - name: MINIO_ACCESS_KEY
-          valueFrom:
-            secretKeyRef:
-              name: industrial-cognition-secrets
-              key: MINIO_ACCESS_KEY
-        - name: MINIO_SECRET_KEY
-          valueFrom:
-            secretKeyRef:
-              name: industrial-cognition-secrets
-              key: MINIO_SECRET_KEY
-        - name: LOG_LEVEL
-          valueFrom:
-            configMapKeyRef:
-              name: industrial-cognition-config
-              key: LOG_LEVEL
-        resources:
-          requests:
-            memory: "256Mi"
-            cpu: "100m"
-          limits:
-            memory: "512Mi"
-            cpu: "500m"
-        livenessProbe:
-          httpGet:
-            path: /health
-            port: 8000
-          initialDelaySeconds: 30
-          periodSeconds: 10
-        readinessProbe:
-          httpGet:
-            path: /health
-            port: 8000
-          initialDelaySeconds: 10
-          periodSeconds: 5
-        volumeMounts:
-        - name: config
-          mountPath: /app/config
-          readOnly: true
-        - name: secrets
-          mountPath: /etc/secrets
-          readOnly: true
+        - name: api
+          image: industrial-cognition/api:latest
+          imagePullPolicy: IfNotPresent
+          command: ["uvicorn"]
+          args: ["src.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: industrial-cognition-config
+          env:
+            # `envFrom` deliberately excludes the Secret: credentials are
+            # composed here so that each value has exactly one source.
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef: { name: industrial-cognition-secrets, key: POSTGRES_USER }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: industrial-cognition-secrets, key: POSTGRES_PASSWORD }
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef: { name: industrial-cognition-secrets, key: POSTGRES_DB }
+            - name: RABBITMQ_DEFAULT_USER
+              valueFrom:
+                secretKeyRef: { name: industrial-cognition-secrets, key: RABBITMQ_DEFAULT_USER }
+            - name: RABBITMQ_DEFAULT_PASS
+              valueFrom:
+                secretKeyRef: { name: industrial-cognition-secrets, key: RABBITMQ_DEFAULT_PASS }
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: industrial-cognition-secrets, key: REDIS_PASSWORD }
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: { name: industrial-cognition-secrets, key: MINIO_ACCESS_KEY }
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef: { name: industrial-cognition-secrets, key: MINIO_SECRET_KEY }
+            # Composite URLs must be assembled from Secret parts, so they are
+            # overridden here rather than taken from the ConfigMap.
+            - name: DATABASE_URL
+              value: "postgresql+psycopg://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/$(POSTGRES_DB)"
+            - name: CELERY_BROKER_URL
+              value: "amqp://$(RABBITMQ_DEFAULT_USER):$(RABBITMQ_DEFAULT_PASS)@$(RABBITMQ_HOST):$(RABBITMQ_PORT)//"
+            - name: CELERY_RESULT_BACKEND
+              value: "redis://:$(REDIS_PASSWORD)@$(REDIS_HOST):$(REDIS_PORT)/0"
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            privileged: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: prometheus-multiproc, mountPath: /tmp/prometheus }
       volumes:
-      - name: config
-        configMap:
-          name: industrial-cognition-config
-      - name: secrets
-        secret:
-          secretName: industrial-cognition-secrets
+        - name: tmp
+          emptyDir: {}
+        - name: prometheus-multiproc
+          emptyDir: {}
 ---
-# API Service Service
 apiVersion: v1
 kind: Service
 metadata:
-  name: industrial-cognition-api
+  name: api
+  namespace: cogni-ns
   labels:
-    app: industrial-cognition
-    component: api
+    app.kubernetes.io/name: industrial-cognition
+    app.kubernetes.io/component: api
 spec:
   type: ClusterIP
   ports:
-  - port: 80
-    targetPort: 8000
-    name: http
-  - port: 8080
-    targetPort: 8001
-    name: websocket
+    # Port 80 keeps in-cluster URLs stable (`http://api`), independent of the
+    # container's 8000.
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
   selector:
-    app: industrial-cognition
-    component: api
+    app.kubernetes.io/name: industrial-cognition
+    app.kubernetes.io/component: api

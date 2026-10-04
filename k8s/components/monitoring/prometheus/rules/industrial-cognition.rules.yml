@@ -1,0 +1,97 @@
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# author : Konstantin Ustiuzhanin
+# ==============================================================================
+#
+# Alerting rules shipped with the deployment.
+#
+# These are intentionally few and load-bearing: each one maps to a failure the
+# architecture explicitly requires the system to report (doc/vision.md
+# "Failure Handling" - NO_TARGET / OUT_OF_REACH / HUMAN_ON_SITE are application
+# states, the rules below cover the infrastructure that carries them).
+groups:
+  - name: industrial-cognition.availability
+    interval: 30s
+    rules:
+      - alert: ApiDown
+        expr: up{job="kubernetes-pods", component="api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API gateway target is down"
+          description: "No scrapeable API pod for 2 minutes. The control plane and WebSocket telemetry are unavailable."
+
+      - alert: VisionWorkerDown
+        expr: up{job="kubernetes-pods", component="vision"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Vision worker target is down"
+          description: "Inference capacity is degraded; frames will accumulate in the RabbitMQ queue."
+
+      - alert: RobotInterfaceDown
+        expr: up{job="kubernetes-pods", component="robot"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Modbus bridge target is down"
+          description: "Detection results cannot reach the physical controller."
+
+  - name: industrial-cognition.data
+    interval: 30s
+    rules:
+      - alert: RabbitMqDown
+        expr: up{job="rabbitmq"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "RabbitMQ is unreachable"
+          description: "The asynchronous pipeline is broken; camera frames cannot be queued."
+
+      - alert: RabbitMqQueueBacklog
+        expr: rabbitmq_queue_messages_ready{queue="vision"} > 100
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Vision queue backlog above 100 messages for 10 minutes"
+          description: "Inference throughput is below ingestion rate. Consider scaling the vision workers (see the KEDA ScaledObject in k8s/base/autoscaling.yaml)."
+
+      - alert: RabbitMqDeadLetterTraffic
+        expr: increase(rabbitmq_queue_messages_published_total{queue="vision.dlq"}[15m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Messages are landing in the dead-letter queue"
+          description: "At least one vision task failed permanently in the last 15 minutes."
+
+  - name: industrial-cognition.persistence
+    interval: 30s
+    rules:
+      - alert: PersistentVolumeNearlyFull
+        expr: >-
+          kubelet_volume_stats_used_bytes{failed_metric="false"}
+          / kubelet_volume_stats_capacity_bytes{failed_metric="false"} > 0.85
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Persistent volume above 85% utilisation"
+          description: "{{ $labels.persistentvolumeclaim }} in namespace {{ $labels.namespace }} is filling up. MinIO and the model cache are the usual suspects."
