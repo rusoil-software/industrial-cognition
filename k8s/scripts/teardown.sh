@@ -15,7 +15,11 @@
 # limitations under the License.
 #
 # author : Konstantin Ustiuzhanin
+<<<<<<< HEAD
 # date   : 2026-Oct-4
+=======
+# date   : 2026-Sep-10
+>>>>>>> 9353103d5fc4ac064cdee843ceca45b8eb141917
 # ==============================================================================
 #
 # Tear down the Industrial Cognition stack.

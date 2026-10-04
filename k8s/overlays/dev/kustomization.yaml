@@ -13,7 +13,10 @@
 # limitations under the License.
 #
 # author : Konstantin Ustiuzhanin
+<<<<<<< HEAD
 # date   : 2026-Oct-4
+=======
+>>>>>>> 9353103d5fc4ac064cdee843ceca45b8eb141917
 # ==============================================================================
 #
 # Development overlay: everything needed to boot the whole pipeline on a
@@ -36,6 +39,7 @@ kind: Kustomization
 
 namespace: cogni-ns
 
+<<<<<<< HEAD
 
 resources:
 - ../../base
@@ -78,3 +82,33 @@ labels:
 - includeSelectors: true
   pairs:
     app.kubernetes.io/part-of: industrial-cognition
+=======
+commonLabels:
+  app.kubernetes.io/part-of: industrial-cognition
+
+resources:
+  - ../../base
+
+images:
+  - name: industrial-cognition/api
+    newTag: dev
+  - name: industrial-cognition/vision
+    newTag: dev
+
+patches:
+  - target: { kind: StatefulSet, name: minio }
+    path: patches/minio-single.yaml
+  # Small volumes so the overlay fits a laptop disk.
+  - target: { kind: StatefulSet, name: postgres }
+    path: patches/postgres-storage-size.yaml
+  - target: { kind: StatefulSet, name: rabbitmq }
+    path: patches/rabbitmq-storage-size.yaml
+  - target: { kind: StatefulSet, name: redis }
+    path: patches/redis-storage-size.yaml
+  - target: { kind: StatefulSet, name: minio }
+    path: patches/minio-storage-size.yaml
+  - target: { kind: PersistentVolumeClaim, name: industrial-cognition-model-cache }
+    path: patches/model-cache-storage-size.yaml
+  # Reduce the inference footprint for a CPU-only box.
+  - path: patches/vision-dev-resources.yaml
+>>>>>>> 9353103d5fc4ac064cdee843ceca45b8eb141917
