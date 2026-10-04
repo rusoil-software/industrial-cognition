@@ -1,0 +1,76 @@
+# Production requirements for the Industrial Cognition system.
+#
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+# Licensed under the Apache License, Version 2.0 - see doc/k8s.md.
+#
+# This file is installed in BOTH production images:
+#
+#   src/api/Dockerfile           -> api, camera, robot   (FastAPI service)
+#   src/vision/Dockerfile.worker -> vision               (Celery worker)
+#
+# It is therefore the union of the runtime dependency sets, and deliberately
+# EXCLUDES anything that only exists to build, test or debug:
+#
+#   * dev.txt / pytest / ruff            - test and lint tooling
+#   * export.txt / torch / transformers  - the one-off OWLv2 -> ONNX export
+#     (scripts/export_model.py), which runs on a workstation or in CI and never
+#     in a serving container
+#   * k8s.txt                            - manifest validation tooling
+#
+# The two serving images still differ, because their inference providers
+# genuinely conflict and cannot be resolved together:
+#
+#   * `api`    installs opencv + `onnxruntime`     (CPU inference; the documented
+#     fallback in doc/k8s.md §8)
+#   * `vision` installs opencv + `onnxruntime-gpu` (the GPU path)
+#
+# `onnxruntime==1.24.4` and `onnxruntime-gpu==1.24.4` ship the same
+# `onnxruntime` import package and are mutually exclusive in one environment.
+# That is why the provider line at the bottom is a choice, and why
+# `src/vision/Dockerfile.worker` installs `requirements/vision.txt` followed by
+# `requirements/api.txt` rather than one merged list. See doc/k8s.md §2.
+#
+# Everything here is pinned to versions already present in requirements/api.txt,
+# requirements/base.txt or requirements/vision.txt.
+
+# --- Application runtime (base.txt / api.txt) -------------------------------
+numpy<2.0.0
+FastAPI==0.136.0
+pydantic==2.13.2
+pydantic-settings==2.13.1
+starlette==1.0.0
+uvicorn[standard]==0.30.0
+httpx==0.28.1
+pyjwt==2.12.1
+asyncio==4.0.0
+pathlib==1.0.1
+
+# --- Persistence: PostgreSQL + Alembic --------------------------------------
+sqlalchemy==2.0.49
+alembic==1.18.4
+# psycopg 3, matching the `postgresql+psycopg://` DSN the deployment provides.
+psycopg[binary]==3.2.9
+
+# --- Robot interface --------------------------------------------------------
+# Modbus/RS-485 over pyserial; the single source of truth for physical control
+# (doc/conventions.md §3).
+serial==0.0.97
+
+# --- Vision and camera ------------------------------------------------------
+opencv-contrib-python==4.11.0.86
+onnxscript>=0.7.1.dev20260422
+
+# --- Asynchronous pipeline (Celery worker) ----------------------------------
+# The worker imports src.vision.service -> src.camera.schemas, so it needs the
+# application runtime above in addition to this block.
+celery==5.6.3
+redis==7.2
+
+# --- Inference provider (choose exactly one) --------------------------------
+# CPU, the default so the stack boots on a CPU-only node:
+onnxruntime==1.24.4
+#
+# GPU alternative for vision nodes - replace the line above with this one, or
+# use requirements/gpu.txt, which contains the same pin:
+# onnxruntime-gpu==1.24.4
+# optimum-onnx[onnxruntime-gpu]==0.1.0

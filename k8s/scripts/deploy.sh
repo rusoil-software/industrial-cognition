@@ -118,17 +118,119 @@ for workload in deployment/api deployment/camera deployment/vision deployment/ro
 done
 
 if [[ "${RUN_MIGRATIONS}" -eq 1 ]]; then
+  # The migration runs as a Job so that N API replicas never race each other.
+  #
+  # `alembic.ini` deliberately carries no database URL (doc/database.md §1), and
+  # the DSN is split across a ConfigMap (POSTGRES_HOST/PORT/DB) and a Secret
+  # (POSTGRES_USER/PASSWORD). The container therefore needs the same
+  # ConfigMap+Secret environment the API gets, plus the assembled DATABASE_URL.
+  #
+  # A hand-written manifest is used instead of `kubectl create job` for two
+  # reasons: that command cannot express `envFrom`, and it requires a `--`
+  # separator - omit it and kubectl parses the command as image-pull flags, so
+  # the pod runs the image's default entrypoint (uvicorn) and the Job "succeeds"
+  # without migrating anything.
   if [[ -s "${REPO_ROOT}/alembic.ini" ]]; then
-    log "Running Alembic migrations"
+    log "Running Alembic migrations (alembic upgrade head)"
+    IMAGE_REF="${REGISTRY_PREFIX:-}industrial-cognition/api:${IMAGE_TAG:-latest}"
+
     kubectl --namespace "${NAMESPACE}" delete job alembic-upgrade --ignore-not-found
-    kubectl --namespace "${NAMESPACE}" create job alembic-upgrade \
-      --image="industrial-cognition/api:${IMAGE_TAG:-latest}" \
-      -- alembic upgrade head
-    kubectl --namespace "${NAMESPACE}" wait --for=condition=complete \
-      job/alembic-upgrade --timeout="${TIMEOUT}"
+    cat <<EOF | kubectl --namespace "${NAMESPACE}" apply --server-side -f -
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: alembic-upgrade
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: industrial-cognition
+    app.kubernetes.io/component: alembic-upgrade
+    app.kubernetes.io/part-of: industrial-cognition
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: industrial-cognition
+        app.kubernetes.io/component: alembic-upgrade
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: data-services
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: alembic
+          image: ${IMAGE_REF}
+          imagePullPolicy: IfNotPresent
+          workingDir: /app
+          command: ["/bin/sh", "-c"]
+          args:
+            # Retry while PostgreSQL is still coming up: the Job may be applied
+            # before the StatefulSet reports Ready, and a failed migration that
+            # exits immediately makes the rollout look broken.
+            - |
+              set -eu
+              echo "waiting for the database to accept connections..."
+              i=0
+              until alembic current >/dev/null 2>&1; do
+                i=\$((i + 1))
+                [ "\$i" -gt 60 ] && echo "database unreachable after 60 attempts" >&2 && exit 1
+                sleep 5
+              done
+              alembic upgrade head
+              alembic current
+          envFrom:
+            - configMapRef:
+                name: industrial-cognition-config
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef: { name: industrial-cognition-secrets, key: POSTGRES_USER }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: industrial-cognition-secrets, key: POSTGRES_PASSWORD }
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef: { name: industrial-cognition-secrets, key: POSTGRES_DB }
+            - name: DATABASE_URL
+              value: "postgresql+psycopg://\$(POSTGRES_USER):\$(POSTGRES_PASSWORD)@\$(POSTGRES_HOST):\$(POSTGRES_PORT)/\$(POSTGRES_DB)"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+EOF
+
+    if kubectl --namespace "${NAMESPACE}" wait --for=condition=complete \
+      job/alembic-upgrade --timeout="${TIMEOUT}"; then
+      log "Migrations applied"
+      kubectl --namespace "${NAMESPACE}" logs job/alembic-upgrade --tail=5 || true
+    else
+      warn "the alembic-upgrade Job did not complete; inspect it with:"
+      warn "  kubectl -n ${NAMESPACE} logs job/alembic-upgrade"
+      warn "  kubectl -n ${NAMESPACE} describe job/alembic-upgrade"
+    fi
   else
     warn "--migrate requested but alembic.ini is empty; skipping."
-    warn "See doc/tasklist.md Stage 1 'Database Schema Migration'."
   fi
 fi
 

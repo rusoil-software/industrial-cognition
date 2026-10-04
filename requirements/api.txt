@@ -8,6 +8,12 @@ pyjwt==2.12.1
 pydantic-settings==2.13.1
 starlette==1.0.0
 sqlalchemy==2.0.49
+# PostgreSQL driver. The deployment DSN is `postgresql+psycopg://...`
+# (k8s/base/app-config.yaml), which is psycopg 3 in synchronous mode; the async
+# engine reuses the same value as `postgresql+psycopg_async://`. psycopg2 is NOT
+# installed, so a bare `postgresql://` is normalised to psycopg 3 by
+# src/api/storage/database.py instead of silently reaching for psycopg2.
+psycopg[binary]==3.2.9
 httpx==0.28.1
 uvicorn[standard]==0.30.0
 serial==0.0.97

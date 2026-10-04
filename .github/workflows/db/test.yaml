@@ -1,0 +1,114 @@
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# author : Konstantin Ustiuzhanin
+# ==============================================================================
+#
+# Database schema and migration tests.
+#
+# A real PostgreSQL service container is used rather than a mock, because the
+# defects worth catching here are PostgreSQL-specific:
+#
+#   * native enum types have no `CREATE TYPE ... IF NOT EXISTS`, so a `downgrade()`
+#     that does not drop them breaks the *next* upgrade with DuplicateObject;
+#   * `autogenerate` idempotence can only be proven against a live database.
+#
+# See doc/database.md §4.
+
+name: Database
+
+on:
+  push:
+    branches: [main, develop, master]
+    paths:
+      - "alembic/**"
+      - "alembic.ini"
+      - "src/api/storage/**"
+      - "tests/db/**"
+      - "requirements/*.txt"
+      - ".github/workflows/db/**"
+  pull_request:
+    branches: [main, develop, master]
+    paths:
+      - "alembic/**"
+      - "alembic.ini"
+      - "src/api/storage/**"
+      - "tests/db/**"
+      - "requirements/*.txt"
+      - ".github/workflows/db/**"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  migrations:
+    name: Schema and migrations
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # Matches the image the k8s StatefulSet deploys (k8s/base/statefulset-postgres.yaml).
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: cogni
+          POSTGRES_PASSWORD: cogni-ci-password
+          POSTGRES_DB: cogni_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cogni -d cogni_db"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # The same DSN shape the deployment provides (k8s/base/app-config.yaml).
+      DATABASE_URL: postgresql+psycopg://cogni:cogni-ci-password@localhost:5432/cogni_db
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements/k8s.txt
+
+      - name: Wait for PostgreSQL
+        run: |
+          for _ in $(seq 1 30); do
+            pg_isready -h localhost -p 5432 -U cogni && exit 0
+            sleep 2
+          done
+          echo "PostgreSQL did not become ready" >&2
+          exit 1
+
+      - name: Static schema checks (no database)
+        run: pytest tests/db/test_models.py -q
+
+      - name: Migration tests against PostgreSQL
+        run: pytest -m db tests/db -q -v
+
+      - name: Proving the suite refuses to pass silently
+        # Without DATABASE_URL the behavioural tests must SKIP, never pass. A
+        # `1 passed, 9 skipped` here is the guard that the skip logic works.
+        run: |
+          env -u DATABASE_URL pytest tests/db -q -m db -rs

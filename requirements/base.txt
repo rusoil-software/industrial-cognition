@@ -12,6 +12,8 @@ pyjwt==2.12.1
 pydantic-settings==2.13.1
 starlette==1.0.0
 sqlalchemy==2.0.49
+# PostgreSQL driver: see the note in requirements/api.txt.
+psycopg[binary]==3.2.9
 httpx==0.28.1
 uvicorn[standard]==0.30.0
 tensorrt-cu12==10.16.1.11

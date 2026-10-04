@@ -24,8 +24,16 @@ This list tracks all development tasks required to bring the system from bluepri
 * ✅ Setup K8s Manifests: Kustomize `base` + `dev`/`prod` overlays covering every microservice, the data
   services, networking, autoscaling and the optional observability/KEDA components. Rendered and
   contract-tested by `tests/k8s` and `.github/workflows/k8s/validate.yaml`; documented in `doc/k8s.md`.
-* 🟡 Database Schema Migration: Run initial Alembic migrations to create all necessary tables (`detection_results`, `system_metadata`).
-* 🟡 Base Dependency Management: Finalize `requirements/prod.txt` based on base dependencies.
+* ✅ Database Schema Migration: Alembic is wired up (`alembic.ini` + `alembic/env.py`), the ORM models in
+  `src/api/storage/models.py` define `detection_results` and `system_metadata` per `doc/vision.md`, and the
+  initial revision creates both tables plus the `object_type`/`camera_status` enums. Verified against a real
+  PostgreSQL: upgrade, full downgrade/re-upgrade round trip, empty second autogenerate, and insert/read-back.
+  `pytest tests/db` (12 static + 10 behavioural tests); documented in `doc/database.md`.
+* ✅ Base Dependency Management: `requirements/prod.txt` finalised as the union of the runtime dependency sets
+  shared by both production images, excluding the `dev`/`export`/`k8s` tiers. The two images still differ in
+  exactly one respect — `api` installs `onnxruntime`, `vision` installs `onnxruntime-gpu`, and those cannot
+  coexist in one environment. `requirements/api.txt` and `base.txt` gained `psycopg[binary]==3.2.9` to match
+  the deployment's `postgresql+psycopg://` DSN.
 
 ### **Stage 2: Core Functionality Implementation**
 
