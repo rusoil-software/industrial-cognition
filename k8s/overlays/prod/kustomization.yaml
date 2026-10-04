@@ -13,10 +13,7 @@
 # limitations under the License.
 #
 # author : Konstantin Ustiuzhanin
-<<<<<<< HEAD
 # date   : 2026-Oct-4
-=======
->>>>>>> 9353103d5fc4ac064cdee843ceca45b8eb141917
 # ==============================================================================
 #
 # Production overlay: full architecture parity and a hardened namespace.
@@ -35,20 +32,10 @@ kind: Kustomization
 
 namespace: cogni-ns
 
-<<<<<<< HEAD
-
-=======
-commonLabels:
-  app.kubernetes.io/part-of: industrial-cognition
-
-resources:
-  - ../../base
->>>>>>> 9353103d5fc4ac064cdee843ceca45b8eb141917
   # Autoscaling, disruption budgets, the namespace quota and network
   # segmentation are production concerns. The dev overlay omits them because a
   # development cluster usually has no metrics-server, is drained by nobody, and
   # cannot reach the physical RTSP/Modbus network anyway.
-<<<<<<< HEAD
   # CPU-based autoscaling for `vision`. Mutually exclusive with
   # ../../components/keda below - enable exactly one of the two.
 resources:
@@ -60,17 +47,6 @@ resources:
 
 components:
 - ../../components/monitoring
-=======
-  - autoscaling.yaml
-  - availability.yaml
-  - networkpolicy.yaml
-  # CPU-based autoscaling for `vision`. Mutually exclusive with
-  # ../../components/keda below - enable exactly one of the two.
-  - hpa-vision-cpu.yaml
-
-components:
-  - ../../components/monitoring
->>>>>>> 9353103d5fc4ac064cdee843ceca45b8eb141917
   # Queue-depth autoscaling for the vision workers, replacing hpa-vision-cpu.yaml.
   # Opt-in, because it requires the KEDA operator and its CRDs to be present -
   # without them the apply fails. Enabling it means deleting the
@@ -80,25 +56,15 @@ components:
   #   - ../../components/keda
 
 images:
-<<<<<<< HEAD
 - name: industrial-cognition/api
   newTag: latest
 - name: industrial-cognition/vision
   newTag: latest
 
-=======
-  - name: industrial-cognition/api
-    newTag: latest
-  - name: industrial-cognition/vision
-    newTag: latest
-
-patches:
->>>>>>> 9353103d5fc4ac064cdee843ceca45b8eb141917
   # --- Storage classes -----------------------------------------------------
   # Empty `storageClassName` means "cluster default"; production pinning is
   # explicit so a default-class change cannot silently move the database onto a
   # different tier. ADJUST `fast-ssd`/`bulk` to the cluster's own classes.
-<<<<<<< HEAD
   # --- Public hostname -----------------------------------------------------
   # --- Edge placement for device-owning workloads ---------------------------
   # --- GPU inference -------------------------------------------------------
@@ -133,22 +99,3 @@ labels:
 - includeSelectors: true
   pairs:
     app.kubernetes.io/part-of: industrial-cognition
-=======
-  - target: { kind: StatefulSet, name: postgres }
-    path: patches/postgres-storage-class.yaml
-  - target: { kind: StatefulSet, name: rabbitmq }
-    path: patches/rabbitmq-storage-class.yaml
-  - target: { kind: StatefulSet, name: redis }
-    path: patches/redis-storage-class.yaml
-  - target: { kind: StatefulSet, name: minio }
-    path: patches/minio-storage-class.yaml
-  - target: { kind: PersistentVolumeClaim, name: industrial-cognition-model-cache }
-    path: patches/model-cache-storage-class.yaml
-  # --- Public hostname -----------------------------------------------------
-  - target: { kind: Ingress, name: industrial-cognition }
-    path: patches/ingress-host.yaml
-  # --- Edge placement for device-owning workloads ---------------------------
-  - path: patches/edge-devices.yaml
-  # --- GPU inference -------------------------------------------------------
-  - path: patches/vision-gpu.yaml
->>>>>>> 9353103d5fc4ac064cdee843ceca45b8eb141917
