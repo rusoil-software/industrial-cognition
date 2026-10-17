@@ -55,6 +55,7 @@ __all__ = [
     "center_to_corners",
     "decode_batch",
     "decode_frame",
+    "decode_queries",
     "nms",
     "sigmoid",
 ]
@@ -297,3 +298,116 @@ def decode_batch(
         decode_frame(logits[i], pred_boxes[i], labels=labels, **kwargs)  # type: ignore[arg-type]
         for i in range(batch)
     ]
+
+
+def decode_queries(
+    logits: np.ndarray,
+    pred_boxes: np.ndarray,
+    labels: Sequence[str],
+    thresholds: Sequence[float],
+    *,
+    iou_threshold: Optional[float] = 0.5,
+    max_detections: int = 32,
+    min_area: float = 0.0,
+    max_area: float = 1.0,
+) -> list[Detection]:
+    """Decode a multi-query output: one class per query, one threshold per query.
+
+    This is the multi-object path. The graph returns ``logits (1, 3600, Q)`` for a
+    text batch of Q prompts, so each box has a score *per query*; the box is attributed
+    to the query that scored it highest, and only if that score clears **that query's**
+    threshold. Per-query thresholds are what let "human" run at 0.10 while "metal
+    sheet" stays at 0.25.
+
+    NMS is applied **per class**, not globally: a confident robot box must not
+    suppress an overlapping human box. Overlapping boxes of the same class still get
+    merged, which is what NMS is for.
+
+    Args:
+        logits: ``(1, N, Q)`` or ``(N, Q)`` float32.
+        pred_boxes: ``(1, N, 4)`` or ``(N, 4)`` centre-form boxes.
+        labels: one label per query, in the model's query order.
+        thresholds: one threshold per query, same order.
+    """
+    scores = sigmoid(_squeeze_batch(logits))
+
+    if scores.ndim != 2:
+        raise ValueError(f"expected a 2-D score array, got shape {scores.shape}")
+
+    num_boxes, num_queries = scores.shape
+    if len(labels) != num_queries:
+        raise ValueError(
+            f"{len(labels)} labels for {num_queries} queries; the text batch and the "
+            "label list must match"
+        )
+    if len(thresholds) == 1 and num_queries > 1:
+        thresholds = tuple(float(thresholds[0]) for _ in range(num_queries))
+    if len(thresholds) != num_queries:
+        raise ValueError(
+            f"{len(thresholds)} thresholds for {num_queries} queries"
+        )
+
+    boxes = center_to_corners(_squeeze_batch(pred_boxes))
+    limits = np.asarray(thresholds, dtype=np.float32)
+
+    # Per box: the best-scoring query, and whether that score clears its threshold.
+    best_query = scores.argmax(axis=1)
+    best_score = scores[np.arange(num_boxes), best_query]
+    keep = best_score >= limits[best_query]
+
+    widths = boxes[:, 2] - boxes[:, 0]
+    heights = boxes[:, 3] - boxes[:, 1]
+    areas = np.clip(widths, 0, None) * np.clip(heights, 0, None)
+    keep &= (areas >= min_area) & (areas <= max_area)
+
+    candidates: dict[int, list[Detection]] = {}
+    for index in np.flatnonzero(keep):
+        query = int(best_query[index])
+        box = boxes[index]
+        candidates.setdefault(query, []).append(
+            Detection(
+                object_type=labels[query],
+                x_norm=float(box[0]),
+                y_norm=float(box[1]),
+                width_norm=float(box[2] - box[0]),
+                height_norm=float(box[3] - box[1]),
+                confidence=float(best_score[index]),
+            )
+        )
+
+    merged: list[Detection] = []
+    for detections in candidates.values():
+        if not detections:
+            continue
+        boxes = np.asarray(
+            [
+                [d.x_norm, d.y_norm, d.x_norm + d.width_norm, d.y_norm + d.height_norm]
+                for d in detections
+            ],
+            dtype=np.float32,
+        )
+        scores = np.asarray([d.confidence for d in detections], dtype=np.float32)
+        if iou_threshold is None or len(detections) == 1:
+            kept = list(range(len(detections)))
+        else:
+            kept = nms(boxes, scores, iou_threshold=iou_threshold).tolist()
+        merged.extend(detections[index] for index in kept)
+
+    merged.sort(key=lambda detection: detection.confidence, reverse=True)
+    return merged[:max_detections]
+
+
+def _squeeze_batch(array: np.ndarray) -> np.ndarray:
+    """Drop a leading batch dimension of one, keeping the query axis intact.
+
+    A single-query output is ``(1, N, 1)`` and must become ``(N, 1)``, *not* ``(N,)``:
+    the query axis carries the class, so squeezing it away would turn a one-class
+    output into something the per-query logic cannot index. (Getting this wrong made
+    every single-query decode fail with "expected a 2-D score array".)
+    """
+    result = np.asarray(array)
+    if result.ndim == 3:
+        if result.shape[0] != 1:
+            raise ValueError(f"expected batch size 1, got {result.shape[0]}")
+        result = result[0]
+    return result

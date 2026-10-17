@@ -18,23 +18,23 @@
 """Business logic for per-camera prompts: validate, tokenise, persist.
 
 The service is the seam the HTTP layer talks to, so the router stays a thin
-translation of domain errors into status codes and the logic here is reachable
-from a CLI, a future web UI or a test without FastAPI.
+translation of domain errors into status codes and the logic here stays reachable from
+a CLI, a future web UI or a test without FastAPI.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Tuple
 
 from sqlalchemy.orm import Session
 
 from src.api.storage import prompt_repository
 from src.vision.prompt import (
-    CameraPrompt,
+    CameraPromptSet,
     PromptEncodingError,
     PromptTokenizer,
-    encode_prompt,
+    encode_prompt_set,
     get_tokenizer,
 )
 
@@ -51,27 +51,30 @@ logger = logging.getLogger(__name__)
 def set_camera_prompt(
     session: Session,
     camera_id: str,
-    labels: Sequence[str],
+    queries: Sequence[Tuple[str, float]],
     tokenizer: Optional[PromptTokenizer] = None,
-) -> CameraPrompt:
-    """Tokenise *labels* and store them as the prompt for *camera_id*.
+) -> CameraPromptSet:
+    """Tokenise ``(label, threshold)`` pairs and store them for *camera_id*.
 
-    The tokenisation happens before any write, so a prompt the model cannot use is
+    Tokenisation happens before any write, so a prompt the model cannot use is
     rejected without leaving a half-configured camera behind.
 
     Raises:
-        PromptEncodingError: invalid camera id, invalid labels, or a prompt that
-            tokenises to no usable tokens.
+        PromptEncodingError: invalid camera id, invalid label or threshold, or a query
+            that tokenises to no usable tokens.
         TokenizerUnavailable: no tokenizer is configured in this deployment.
     """
     camera_id = prompt_repository.validate_camera_id(camera_id)
+    if not queries:
+        raise PromptEncodingError("at least one detection query is required")
+
     tokenizer = tokenizer or get_tokenizer()
-    prompt = encode_prompt(labels, tokenizer, camera_id=camera_id)
-    return prompt_repository.save_prompt(session, prompt)
+    prompt_set = encode_prompt_set(queries, tokenizer, camera_id=camera_id)
+    return prompt_repository.save_prompt(session, prompt_set)
 
 
-def get_camera_prompt(session: Session, camera_id: str) -> Optional[CameraPrompt]:
-    """Return the prompt in force for *camera_id*, or ``None``."""
+def get_camera_prompt(session: Session, camera_id: str) -> Optional[CameraPromptSet]:
+    """Return the queries in force for *camera_id*, or ``None``."""
     return prompt_repository.load_prompt(session, camera_id)
 
 
@@ -80,6 +83,6 @@ def delete_camera_prompt(session: Session, camera_id: str) -> bool:
     return prompt_repository.delete_prompt(session, camera_id)
 
 
-def list_camera_prompts(session: Session) -> list[CameraPrompt]:
+def list_camera_prompts(session: Session) -> list[CameraPromptSet]:
     """Return every configured camera prompt."""
     return prompt_repository.list_prompts(session)

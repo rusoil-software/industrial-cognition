@@ -12,11 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""Tests for prompt construction and tokenisation.
+"""Tests for detection queries: one phrase per object, each with its own threshold.
 
-A deterministic fake tokenizer is used so the round trip is asserted without a
-network download; the HuggingFace implementation is exercised only where it is
-available.
+A deterministic fake tokenizer keeps this offline; the semantics under test are the
+query set's, not the tokenizer's.
 """
 
 from __future__ import annotations
@@ -24,13 +23,14 @@ from __future__ import annotations
 import pytest
 
 from src.vision.prompt import (
+    DEFAULT_THRESHOLD,
     CameraPrompt,
+    CameraPromptSet,
     PromptEncodingError,
-    TransformersPromptTokenizer,
-    build_prompt_text,
-    encode_prompt,
     TokenizerUnavailable,
-    get_tokenizer,
+    build_prompt_text,
+    clamp_threshold,
+    encode_prompt_set,
 )
 
 
@@ -48,140 +48,202 @@ class FakeTokenizer:
         self.seen.append(text)
         if self._empty:
             return (0,) * 16, (0,) * 16
-        # A stable pseudo-token id per character, bounded to the CLIP vocabulary.
         ids = tuple((ord(ch) % 49407) or 1 for ch in text[:15])
         padding = 16 - len(ids)
         return ids + (49407,) * padding, (1,) * len(ids) + (0,) * padding
 
 
 # --------------------------------------------------------------------------- #
-# Prompt text
+# Text and thresholds
 # --------------------------------------------------------------------------- #
 def test_prompt_text_follows_the_owlv2_convention() -> None:
-    assert build_prompt_text(["metal sheet"]) == "metal sheet."
-    assert build_prompt_text(["metal sheet", "debris"]) == "metal sheet. debris."
+    assert build_prompt_text("metal sheet") == "metal sheet."
+    assert build_prompt_text(" robot ") == "robot."
 
 
-def test_prompt_text_trims_and_drops_blank_entries() -> None:
-    assert build_prompt_text([" metal sheet ", "", "  "]) == "metal sheet."
-
-
-def test_prompt_text_requires_at_least_one_label() -> None:
-    with pytest.raises(PromptEncodingError, match="at least one"):
-        build_prompt_text([])
+@pytest.mark.parametrize("label", ["", "   "])
+def test_prompt_text_requires_a_label(label: str) -> None:
     with pytest.raises(PromptEncodingError):
-        build_prompt_text(["   "])
+        build_prompt_text(label)
 
 
 def test_prompt_text_rejects_a_period_inside_a_label() -> None:
-    """A period would split one label into two and shift every class index."""
+    """A period would split one phrase into two and shift every later query index."""
     with pytest.raises(PromptEncodingError, match="period"):
-        build_prompt_text(["metal. sheet"])
+        build_prompt_text("metal. sheet")
 
 
-def test_prompt_text_rejects_an_over_long_label() -> None:
-    with pytest.raises(PromptEncodingError, match="too long"):
-        build_prompt_text(["x" * 65])
+def test_threshold_bounds_are_enforced() -> None:
+    assert clamp_threshold(0.1) == 0.1
+    assert clamp_threshold("0.25") == 0.25
+    for bad in (0.0, 1.0, -0.5, 1.5, float("nan")):
+        with pytest.raises(PromptEncodingError):
+            clamp_threshold(bad)
+
+
+def test_threshold_rejects_non_numeric() -> None:
+    with pytest.raises(PromptEncodingError, match="number"):
+        clamp_threshold("high")  # type: ignore[arg-type]
 
 
 # --------------------------------------------------------------------------- #
-# Encoding
+# Query sets
 # --------------------------------------------------------------------------- #
-def test_encode_prompt_produces_a_consistent_encoding() -> None:
+def test_encode_prompt_set_creates_one_query_per_object() -> None:
     tokenizer = FakeTokenizer()
-    prompt = encode_prompt(["metal sheet"], tokenizer, camera_id="cam0")
+    prompt_set = encode_prompt_set(
+        [("robot", 0.25), ("person", 0.1)], tokenizer, camera_id="cam0"
+    )
 
-    assert prompt.camera_id == "cam0"
-    assert prompt.labels == ("metal sheet",)
-    assert prompt.prompt_text == "metal sheet."
-    assert len(prompt.input_ids) == len(prompt.attention_mask) == 16
-    assert prompt.tokenizer == "fake"
-    assert tokenizer.seen == ["metal sheet."]
+    assert prompt_set.labels == ("robot", "person")
+    assert prompt_set.thresholds == (0.25, 0.1)
+    assert len(prompt_set.queries) == 2
+    assert tokenizer.seen == ["robot.", "person."]
 
 
-def test_encode_prompt_rejects_padding_only_tokens() -> None:
-    """The silent-outage guard: padding input saturates the graph's text path."""
+def test_query_set_produces_one_text_row_per_query() -> None:
+    """The batch dimension is the query axis: this is what makes one pass enough."""
+    prompt_set = encode_prompt_set([("robot", 0.25), ("person", 0.1)], FakeTokenizer())
+    ids, mask = prompt_set.as_arrays(expected_length=16)
+
+    assert ids.shape == (2, 16)
+    assert mask.shape == (2, 16)
+
+
+def test_thresholds_survive_the_round_trip() -> None:
+    prompt_set = encode_prompt_set([("robot", 0.31), ("person", 0.12)], FakeTokenizer())
+    restored = CameraPromptSet.from_dict(prompt_set.to_dict())
+
+    assert restored.thresholds == (0.31, 0.12)
+    assert restored.labels == ("robot", "person")
+
+
+def test_a_query_set_needs_at_least_one_query() -> None:
+    with pytest.raises(PromptEncodingError):
+        CameraPromptSet(queries=())
+    with pytest.raises(PromptEncodingError):
+        encode_prompt_set([], FakeTokenizer())
+
+
+def test_duplicate_labels_are_rejected() -> None:
+    """Two queries for the same phrase would split one class's detections in two."""
+    with pytest.raises(PromptEncodingError, match="duplicate"):
+        encode_prompt_set([("robot", 0.25), ("robot", 0.5)], FakeTokenizer())
+
+
+def test_inconsistent_token_lengths_are_rejected() -> None:
+    short = CameraPrompt(
+        label="a",
+        threshold=0.3,
+        prompt_text="a.",
+        input_ids=(1, 2),
+        attention_mask=(1, 1),
+    )
+    long = CameraPrompt(
+        label="b",
+        threshold=0.3,
+        prompt_text="b.",
+        input_ids=(1, 2, 3),
+        attention_mask=(1, 1, 1),
+    )
+    with pytest.raises(PromptEncodingError, match="inconsistent"):
+        CameraPromptSet(queries=(short, long))
+
+
+def test_as_arrays_checks_the_expected_length() -> None:
+    prompt_set = encode_prompt_set([("robot", 0.25)], FakeTokenizer())
+    with pytest.raises(ValueError, match="expects"):
+        prompt_set.as_arrays(expected_length=32)
+
+
+# --------------------------------------------------------------------------- #
+# Validation of a single query
+# --------------------------------------------------------------------------- #
+def test_padding_only_tokens_are_rejected() -> None:
+    """The silent-outage guard: padding saturates the graph's text path."""
     with pytest.raises(PromptEncodingError, match="padding|no usable tokens"):
-        encode_prompt(["metal sheet"], FakeTokenizer(empty=True))
+        encode_prompt_set([("robot", 0.25)], FakeTokenizer(empty=True))
 
 
-def test_encoding_round_trips_through_a_dict() -> None:
-    prompt = encode_prompt(["metal sheet", "debris"], FakeTokenizer(), camera_id="cam1")
-    restored = CameraPrompt.from_dict(prompt.to_dict())
-
-    assert restored == prompt
-    assert restored.to_query().labels == ("metal sheet", "debris")
-
-
-def test_from_dict_rejects_malformed_stored_data() -> None:
-    with pytest.raises(PromptEncodingError, match="malformed"):
-        CameraPrompt.from_dict({"labels": ["a"]})
-
-
-def test_prompt_rejects_mismatched_mask_length() -> None:
+def test_mismatched_mask_length_is_rejected() -> None:
     with pytest.raises(PromptEncodingError, match="different lengths"):
         CameraPrompt(
-            labels=("a",),
+            label="a",
+            threshold=0.3,
             prompt_text="a.",
             input_ids=(1, 2, 3),
             attention_mask=(1, 1),
         )
 
 
-def test_prompt_rejects_an_empty_attention_mask() -> None:
+def test_empty_attention_mask_is_rejected() -> None:
     with pytest.raises(PromptEncodingError, match="mask"):
         CameraPrompt(
-            labels=("a",),
+            label="a",
+            threshold=0.3,
             prompt_text="a.",
             input_ids=(1, 2),
             attention_mask=(0, 0),
         )
 
 
-def test_to_query_is_accepted_by_the_inference_backend() -> None:
-    """The prompt must satisfy the same validation the backend applies."""
-    prompt = encode_prompt(["metal sheet"], FakeTokenizer())
-    query = prompt.to_query()
-    ids, mask = query.as_arrays(expected_length=16)
-    assert ids.shape == (1, 16)
-    assert mask.shape == (1, 16)
+def test_default_threshold_is_used_when_unspecified() -> None:
+    assert DEFAULT_THRESHOLD == 0.25
+
+
+# --------------------------------------------------------------------------- #
+# Legacy shapes
+# --------------------------------------------------------------------------- #
+def test_a_legacy_single_prompt_row_is_still_readable() -> None:
+    legacy = {
+        "camera_id": "cam0",
+        "labels": ["metal sheet"],
+        "prompt_text": "metal sheet.",
+        "input_ids": [49406, 4044, 7298, 269, 49407] + [0] * 11,
+        "attention_mask": [1, 1, 1, 1, 1] + [0] * 11,
+        "tokenizer": "transformers:x",
+        "max_length": 16,
+    }
+
+    prompt_set = CameraPromptSet.from_dict(legacy)
+
+    assert prompt_set.labels == ("metal sheet",)
+    # No threshold was stored before thresholds existed; the default applies.
+    assert prompt_set.thresholds == (DEFAULT_THRESHOLD,)
+
+
+def test_a_legacy_multi_label_row_expands_to_one_query_each() -> None:
+    legacy = {
+        "camera_id": "cam0",
+        "labels": ["metal sheet", "debris"],
+        "prompt_text": "metal sheet. debris.",
+        "input_ids": [49406, 1, 2, 49407] + [0] * 12,
+        "attention_mask": [1, 1, 1, 1] + [0] * 12,
+        "max_length": 16,
+    }
+
+    prompt_set = CameraPromptSet.from_dict(legacy)
+
+    assert prompt_set.labels == ("metal sheet", "debris")
+
+
+def test_malformed_stored_data_is_rejected() -> None:
+    with pytest.raises(PromptEncodingError, match="malformed"):
+        CameraPromptSet.from_dict({"nothing": "useful"})
 
 
 # --------------------------------------------------------------------------- #
 # Tokenizer availability
 # --------------------------------------------------------------------------- #
-def test_get_tokenizer_returns_a_transformers_backend() -> None:
-    tokenizer = get_tokenizer()
-    assert isinstance(tokenizer, TransformersPromptTokenizer)
-    assert tokenizer.max_length == 16
-
-
-def test_transformers_tokenizer_fails_loudly_when_unavailable() -> None:
-    """Without the package or local files, setting a prompt must error clearly."""
-    tokenizer = TransformersPromptTokenizer("definitely-not-a-real-model-xyz")
-    try:
-        tokenizer.encode("metal sheet.")
-    except Exception as exc:  # noqa: BLE001 - exact type depends on the image
-        assert "transformers" in str(exc) or "not available" in str(exc)
-    else:
-        pytest.skip("transformers is installed with a usable offline cache")
-
-
 def test_tokenizer_unavailable_is_not_reported_as_a_prompt_error() -> None:
-    """A missing tokenizer is a deployment problem (503), not a bad prompt (422).
-
-    Found in the live cluster: encode_prompt wrapped every tokenizer exception in
-    PromptEncodingError, so the API answered 422 "tokenisation failed: ..." and the
-    503 branch was unreachable. An operator would have chased the prompt instead of
-    the image.
-    """
+    """A missing tokenizer is a deployment problem (503), not a bad prompt (422)."""
 
     class Unavailable:
         name = "unavailable"
         max_length = 16
 
         def encode(self, text: str):
-            raise TokenizerUnavailable("the prompt tokenizer requires 	ransformers")
+            raise TokenizerUnavailable("no tokenizer")
 
     with pytest.raises(TokenizerUnavailable):
-        encode_prompt(["metal sheet"], Unavailable())
+        encode_prompt_set([("robot", 0.25)], Unavailable())

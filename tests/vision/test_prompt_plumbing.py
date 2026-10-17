@@ -33,7 +33,7 @@ from src.camera.frames import CapturedFrame  # noqa: E402
 from src.pipeline.dispatcher import FrameDispatcher, InProcessTransport  # noqa: E402
 from src.pipeline.stats import PipelineStats  # noqa: E402
 from src.vision.backend import InferenceOutput  # noqa: E402
-from src.vision.prompt import encode_prompt  # noqa: E402
+from src.vision.prompt import encode_prompt_set  # noqa: E402
 from src.vision.worker import VisionRuntimeConfig, VisionWorker  # noqa: E402
 
 
@@ -86,7 +86,7 @@ def jpeg_frame() -> CapturedFrame:
 
 
 def test_dispatcher_embeds_the_prompt_in_the_payload() -> None:
-    prompt = encode_prompt(["metal sheet"], FakeTokenizer(), camera_id="cam0")
+    prompt = encode_prompt_set([("metal sheet", 0.25)], FakeTokenizer(), camera_id="cam0")
     submitted: list[dict] = []
 
     dispatcher = FrameDispatcher(
@@ -97,10 +97,12 @@ def test_dispatcher_embeds_the_prompt_in_the_payload() -> None:
     dispatcher.dispatch(jpeg_frame(), prompt=prompt)
 
     assert submitted, "the frame was not submitted"
-    assert submitted[0]["prompt"]["labels"] == ["metal sheet"]
-    assert submitted[0]["prompt"]["camera_id"] == "cam0"
-    # The token IDs travel too, so the worker needs no shared prompt store.
-    assert len(submitted[0]["prompt"]["input_ids"]) == 16
+    # The payload carries the whole query set: label, threshold and token IDs, so
+    # the worker needs no shared prompt store and no per-class configuration.
+    queries = submitted[0]["prompt"]["queries"]
+    assert [query["label"] for query in queries] == ["metal sheet"]
+    assert queries[0]["threshold"] == 0.25
+    assert len(queries[0]["input_ids"]) == 16
 
 
 def test_dispatcher_payload_has_no_prompt_when_none_is_given() -> None:
@@ -118,7 +120,7 @@ def test_dispatcher_payload_has_no_prompt_when_none_is_given() -> None:
 def test_worker_passes_the_camera_prompt_to_the_backend() -> None:
     backend = RecordingBackend()
     worker = VisionWorker(backend, VisionRuntimeConfig(), worker_id="test")
-    prompt = encode_prompt(["metal sheet"], FakeTokenizer(), camera_id="cam0")
+    prompt = encode_prompt_set([("metal sheet", 0.25)], FakeTokenizer(), camera_id="cam0")
 
     worker.process_frame(jpeg_frame(), prompt=prompt)
 
@@ -126,7 +128,9 @@ def test_worker_passes_the_camera_prompt_to_the_backend() -> None:
     query = backend.queries[0]
     assert query is not None
     assert query.labels == ("metal sheet",)
-    assert len(query.input_ids) == 16
+    # One row per query: the text batch is the class axis.
+    assert query.queries[0].threshold == 0.25
+    assert len(query.queries[0].input_ids) == 16
 
 
 def test_worker_without_a_prompt_uses_the_backend_default() -> None:
@@ -142,7 +146,7 @@ def test_worker_payload_carries_the_prompt_to_the_result_path() -> None:
     """End to end through the wire format used by the Celery task."""
     backend = RecordingBackend()
     worker = VisionWorker(backend, VisionRuntimeConfig(), worker_id="test")
-    prompt = encode_prompt(["metal sheet"], FakeTokenizer(), camera_id="cam0")
+    prompt = encode_prompt_set([("metal sheet", 0.25)], FakeTokenizer(), camera_id="cam0")
 
     frame = jpeg_frame()
     payload = frame.to_payload()

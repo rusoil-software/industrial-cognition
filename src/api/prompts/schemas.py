@@ -15,12 +15,19 @@
 # author : Konstantin Ustiuzhanin
 # date   : 2026-Oct-17
 # ==============================================================================
-"""HTTP schemas for the per-camera detection prompt.
+"""HTTP schemas for per-camera detection prompts.
 
-The API accepts **object names**, not pre-tokenised IDs: the System User types
-"metal sheet", not a CLIP token vector, and the tokenisation is the server's job.
-The response returns the tokenised form as well, so an operator can confirm what
-the model will actually be asked for - useful when a phrase tokenises unexpectedly.
+The System User submits **queries**, each with its own threshold:
+
+    {"prompts": [{"label": "metal sheet", "threshold": 0.25},
+                 {"label": "person",      "threshold": 0.10}]}
+
+One query per object: OWLv2 turns each label into its own class channel, and all of
+them are evaluated in a single forward pass. Per-query thresholds are what let a loose
+human-presence check coexist with strict actuation thresholds on the same camera.
+
+The `labels` form is kept for compatibility - it expands to one query per label
+sharing a single threshold.
 """
 
 from __future__ import annotations
@@ -29,60 +36,129 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
+from src.vision.prompt import DEFAULT_THRESHOLD, MAX_THRESHOLD, MIN_THRESHOLD
 
-class PromptRequest(BaseModel):
-    """What the System User submits for one camera."""
 
-    labels: List[str] = Field(
+class PromptQueryRequest(BaseModel):
+    """One object to look for, and how confident the model must be."""
+
+    label: str = Field(
         ...,
         min_length=1,
-        max_length=8,
+        max_length=64,
+        description="Short noun phrase, e.g. 'metal sheet'. One phrase per object.",
+    )
+    threshold: float = Field(
+        default=DEFAULT_THRESHOLD,
+        ge=MIN_THRESHOLD,
+        le=MAX_THRESHOLD,
         description=(
-            "Object names to look for, in class order, e.g. ['metal sheet']. "
-            "OWLv2 expects short noun phrases; each becomes one class."
+            "Confidence required for this object, 0.01-0.99. Use a lower value for "
+            "safety-relevant classes: a missed person costs more than a false alarm."
         ),
+    )
+
+    @field_validator("label")
+    @classmethod
+    def _clean_label(cls, label: str) -> str:
+        cleaned = label.strip()
+        if not cleaned:
+            raise ValueError("an object name is required")
+        return cleaned
+
+
+class PromptRequest(BaseModel):
+    """Either the query form or the legacy labels form."""
+
+    prompts: Optional[List[PromptQueryRequest]] = Field(
+        default=None,
+        min_length=1,
+        max_length=16,
+        description="Detection queries; each becomes one class.",
+    )
+    labels: Optional[List[str]] = Field(
+        default=None,
+        description="Legacy form: one query per label, all using `threshold`.",
+    )
+    threshold: float = Field(
+        default=DEFAULT_THRESHOLD,
+        ge=MIN_THRESHOLD,
+        le=MAX_THRESHOLD,
+        description="Threshold applied to the legacy `labels` form.",
     )
 
     @field_validator("labels")
     @classmethod
-    def _no_blank_labels(cls, labels: List[str]) -> List[str]:
+    def _no_blank_labels(cls, labels: Optional[List[str]]) -> Optional[List[str]]:
+        if labels is None:
+            return None
         cleaned = [label.strip() for label in labels if label and label.strip()]
         if not cleaned:
             raise ValueError("at least one non-blank object name is required")
         return cleaned
 
+    def queries(self) -> List[PromptQueryRequest]:
+        """Normalise either accepted form into a list of queries.
 
-class PromptResponse(BaseModel):
-    """The prompt in force for a camera, with its tokenised form."""
+        Raises:
+            ValueError: when neither form is supplied, or both are.
+        """
+        if self.prompts and self.labels:
+            raise ValueError("send either 'prompts' or 'labels', not both")
+        if self.prompts:
+            return list(self.prompts)
+        if self.labels:
+            return [
+                PromptQueryRequest(label=label, threshold=self.threshold)
+                for label in self.labels
+            ]
+        raise ValueError("at least one detection query is required")
 
-    camera_id: str
-    labels: List[str]
+
+class PromptQueryResponse(BaseModel):
+    """One query as stored, including its tokenisation."""
+
+    label: str
+    threshold: float
     prompt_text: str
     input_ids: List[int]
     attention_mask: List[int]
-    tokenizer: str
-    max_length: int
-    active_tokens: int = Field(
-        ...,
-        description="Non-padding token count; 0 would mean nothing is attended to.",
-    )
+    active_tokens: int
 
     @classmethod
-    def from_prompt(cls, prompt) -> "PromptResponse":  # noqa: ANN001 - CameraPrompt
+    def from_prompt(cls, prompt) -> "PromptQueryResponse":  # noqa: ANN001 - CameraPrompt
         return cls(
-            camera_id=prompt.camera_id,
-            labels=list(prompt.labels),
+            label=prompt.label,
+            threshold=prompt.threshold,
             prompt_text=prompt.prompt_text,
             input_ids=list(prompt.input_ids),
             attention_mask=list(prompt.attention_mask),
-            tokenizer=prompt.tokenizer,
-            max_length=prompt.max_length,
             active_tokens=sum(prompt.attention_mask),
         )
 
 
+class PromptResponse(BaseModel):
+    """The queries in force for one camera."""
+
+    camera_id: str
+    prompts: List[PromptQueryResponse]
+    tokenizer: str
+    max_length: int
+
+    @classmethod
+    def from_set(cls, prompt_set) -> "PromptResponse":  # noqa: ANN001 - CameraPromptSet
+        return cls(
+            camera_id=prompt_set.camera_id,
+            prompts=[
+                PromptQueryResponse.from_prompt(query) for query in prompt_set.queries
+            ],
+            tokenizer=prompt_set.tokenizer,
+            max_length=prompt_set.max_length,
+        )
+
+
 class PromptListResponse(BaseModel):
-    prompts: List[PromptResponse]
+    cameras: List[PromptResponse]
     count: int
 
 

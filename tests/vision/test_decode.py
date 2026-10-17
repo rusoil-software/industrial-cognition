@@ -25,6 +25,7 @@ import numpy as np
 import pytest
 
 from src.vision.decode import (
+    decode_queries,  # noqa: F401
     center_to_corners,
     decode_batch,
     decode_frame,
@@ -285,3 +286,108 @@ def test_decode_batch_accepts_unbatched_input() -> None:
     results = decode_batch(logits[0], boxes[0], labels=LABELS)
     assert len(results) == 1
     assert len(results[0]) == 1
+
+
+# --------------------------------------------------------------------------- #
+# Multi-query decoding (one class per prompt, one threshold per prompt)
+# --------------------------------------------------------------------------- #
+def _multi_output(scores: dict[int, list[float]], num_boxes: int = 8):
+    """Build ``(1, N, Q)`` logits where ``scores[box][query]`` is a probability."""
+    num_queries = max(len(row) for row in scores.values())
+    logits = np.full((1, num_boxes, num_queries), -20.0, dtype=np.float32)
+    boxes = np.zeros((1, num_boxes, 4), dtype=np.float16)
+    for index, row in scores.items():
+        for query, probability in enumerate(row):
+            logits[0, index, query] = float(np.log(probability / (1 - probability)))
+        boxes[0, index] = np.asarray([0.2 + 0.05 * index, 0.3, 0.08, 0.08], dtype=np.float16)
+    return logits, boxes
+
+
+def test_decode_queries_attributes_each_box_to_its_best_query() -> None:
+    """A box goes to the query that scored it highest, not to label[0]."""
+    logits, boxes = _multi_output({0: [0.20, 0.80], 1: [0.70, 0.20]})
+
+    detections = decode_queries(
+        logits, boxes, labels=("robot", "person"), thresholds=(0.1, 0.1)
+    )
+
+    by_label = {detection.object_type: detection for detection in detections}
+    assert set(by_label) == {"robot", "person"}
+    assert by_label["person"].confidence == pytest.approx(0.8, abs=1e-3)
+    assert by_label["robot"].confidence == pytest.approx(0.7, abs=1e-3)
+
+
+def test_each_query_applies_its_own_threshold() -> None:
+    """The point of per-query thresholds: strict for actuation, loose for safety."""
+    logits, boxes = _multi_output({0: [0.19, 0.0]})
+
+    strict = decode_queries(
+        logits, boxes, labels=("robot", "person"), thresholds=(0.25, 0.10)
+    )
+    loose = decode_queries(
+        logits, boxes, labels=("robot", "person"), thresholds=(0.10, 0.10)
+    )
+
+    assert strict == [], "0.19 is below the robot threshold of 0.25"
+    assert len(loose) == 1, "0.19 clears a threshold of 0.10"
+    assert loose[0].object_type == "robot"
+
+
+def test_a_box_below_every_threshold_is_dropped() -> None:
+    logits, boxes = _multi_output({0: [0.05, 0.02]})
+    assert decode_queries(
+        logits, boxes, labels=("robot", "person"), thresholds=(0.25, 0.10)
+    ) == []
+
+
+def test_nms_is_per_class_so_classes_do_not_suppress_each_other() -> None:
+    """A robot box on top of a person box must not hide it: different classes."""
+    num_boxes = 2
+    logits = np.full((1, num_boxes, 2), -20.0, dtype=np.float32)
+    boxes = np.zeros((1, num_boxes, 4), dtype=np.float16)
+    # Identical, fully overlapping boxes.
+    for index in range(num_boxes):
+        boxes[0, index] = np.asarray([0.5, 0.5, 0.4, 0.4], dtype=np.float16)
+    logits[0, 0, 0] = 5.0  # box 0 -> robot
+    logits[0, 1, 1] = 5.0  # box 1 -> person
+
+    detections = decode_queries(
+        logits, boxes, labels=("robot", "person"), thresholds=(0.5, 0.5), iou_threshold=0.5
+    )
+
+    assert {detection.object_type for detection in detections} == {"robot", "person"}
+
+
+def test_same_class_overlaps_are_suppressed() -> None:
+    num_boxes = 3
+    logits = np.full((1, num_boxes, 1), -20.0, dtype=np.float32)
+    boxes = np.zeros((1, num_boxes, 4), dtype=np.float16)
+    for index in range(num_boxes):
+        boxes[0, index] = np.asarray([0.5, 0.5, 0.4, 0.4], dtype=np.float16)
+        logits[0, index, 0] = 4.0 + index * 0.1
+
+    detections = decode_queries(
+        logits, boxes, labels=("robot",), thresholds=(0.5,), iou_threshold=0.5
+    )
+
+    assert len(detections) == 1
+
+
+def test_threshold_count_must_match_query_count() -> None:
+    logits, boxes = _multi_output({0: [0.9, 0.9]})
+    with pytest.raises(ValueError, match="threshold"):
+        decode_queries(logits, boxes, labels=("a", "b"), thresholds=(0.1, 0.2, 0.3))
+
+
+def test_label_count_must_match_query_count() -> None:
+    logits, boxes = _multi_output({0: [0.9, 0.9]})
+    with pytest.raises(ValueError, match="labels"):
+        decode_queries(logits, boxes, labels=("a",), thresholds=(0.1, 0.1))
+
+
+def test_a_single_threshold_is_broadcast_across_queries() -> None:
+    logits, boxes = _multi_output({0: [0.9, 0.9]})
+    detections = decode_queries(
+        logits, boxes, labels=("a", "b"), thresholds=(0.5,)
+    )
+    assert len(detections) == 1

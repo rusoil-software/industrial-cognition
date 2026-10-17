@@ -490,3 +490,65 @@ is not. Two honest options, both better than silently lowering the number global
 
 The measured scores are recorded here so that whichever is chosen is a decision, not an
 accident.
+
+---
+
+## 15. Several objects, one pass, a threshold each
+
+The single-class conclusion in §14 was wrong, and the way it was wrong is worth
+recording. `logits` came back `(1, 3600, 1)` because the text input was always sent as a
+batch of **one**. The graph's text batch *is* the class axis: sending `input_ids` of
+shape `(N, 16)` returns `logits (1, 3600, N)`. Measured with
+`scripts/probe_query_axis.py`: 1, 2 and 3 prompts give 1, 2 and 3 query channels. This
+is the approach `scripts/proof_of_work.py` already used.
+
+So multi-object detection is **one forward pass with every label in the text batch**,
+then per box the argmax over the query axis picks its class. Measured cost is the cost
+of a single prompt: five queries took 5.98 s on CPU locally versus ~5 s for one, and
+three queries took 10.4 s inside the 2-CPU worker.
+
+### Per-query thresholds (the safety gap from §14)
+
+Each query carries its own threshold, so a camera can ask for rigid objects strictly and
+people loosely:
+
+```http
+PUT /cameras/main/prompt
+{"prompts": [{"label": "robot",         "threshold": 0.25},
+             {"label": "person",        "threshold": 0.10},
+             {"label": "cardboard box", "threshold": 0.35}]}
+```
+
+A box is attributed to the query that scored it highest, and only if that score clears
+**that query's** threshold. `decode_queries()` implements this; NMS runs per class, so a
+confident robot box cannot suppress an overlapping person box.
+
+Live in the cluster, on the real photograph, one pass:
+
+```
+inference 10.4 s -> 18 detections {cardboard box: 16, person: 1 (0.415), robot: 1 (0.322)}
+```
+
+### Two properties that are easy to get wrong
+
+* **Synonyms cannibalise.** Asking for both `human` and `person` does not give two
+  boxes: the same box is attributed to whichever scored higher, so the other query
+  reports nothing. Configure one phrase per object. (`human` 0.188 vs `person` 0.324 on
+  this image - `person` is the better phrase.)
+* **A wrong prompt must not degrade to the default.** When a payload's prompt cannot be
+  parsed, the worker now fails the frame with `unusable prompt: ...` instead of quietly
+  falling back to the process default. Falling back reports confident detections
+  labelled with a class the operator did not configure, which is worse than no
+  detection. This was not hypothetical: the first live run of this feature used the HTTP
+  field name (`prompts`) where the worker expected `queries`, and the fallback silently
+  returned `metal_sheet` boxes for a robot/person prompt. `CameraPromptSet.from_dict`
+  now accepts both names, and the fallback is gone either way.
+
+### Storage and wire format
+
+`system_metadata[camera_prompt:<id>].value_json` holds
+`{"queries": [{label, threshold, prompt_text, input_ids, attention_mask}, ...]}`; the
+human-readable `value` summarises it as `robot@0.25, person@0.1`. Legacy single-prompt
+rows are migrated on read (their labels expand to one query each, default threshold), so
+no database migration was needed. The dispatcher embeds the whole set in each frame
+payload, keeping workers stateless.

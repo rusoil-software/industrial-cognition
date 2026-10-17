@@ -43,7 +43,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.api.storage.models import SystemMetadata
-from src.vision.prompt import CameraPrompt, PromptEncodingError
+from src.vision.prompt import CameraPromptSet, PromptEncodingError
 
 __all__ = [
     "PROMPT_KEY_PREFIX",
@@ -92,7 +92,7 @@ def _camera_id_from_key(key: str) -> str:
     return key[len(PROMPT_KEY_PREFIX) :]
 
 
-def save_prompt(session: Session, prompt: CameraPrompt) -> CameraPrompt:
+def save_prompt(session: Session, prompt: CameraPromptSet) -> CameraPromptSet:
     """Insert or update the prompt for ``prompt.camera_id``.
 
     Upsert via select-then-update rather than a dialect-specific
@@ -105,43 +105,43 @@ def save_prompt(session: Session, prompt: CameraPrompt) -> CameraPrompt:
 
     row = session.scalar(select(SystemMetadata).where(SystemMetadata.key == key))
     payload = prompt.to_dict()
+    summary = ", ".join(
+        f"{query.label}@{query.threshold:g}" for query in prompt.queries
+    )
 
     if row is None:
         row = SystemMetadata(
             key=key,
-            value=prompt.prompt_text,
+            value=summary,
             value_json=payload,
             last_heartbeat=None,
         )
         session.add(row)
     else:
-        row.value = prompt.prompt_text
+        row.value = summary
         row.value_json = payload
 
     session.flush()
-    logger.info("stored prompt for camera %s: %r", camera_id, prompt.prompt_text)
+    logger.info("stored prompts for camera %s: %s", camera_id, summary)
     return prompt
 
 
-def load_prompt(session: Session, camera_id: str) -> Optional[CameraPrompt]:
+def load_prompt(session: Session, camera_id: str) -> Optional[CameraPromptSet]:
     """Return the stored prompt for *camera_id*, or ``None`` if unset."""
     key = prompt_key(camera_id)
     row = session.scalar(select(SystemMetadata).where(SystemMetadata.key == key))
     if row is None or row.value_json is None:
         return None
-    prompt = CameraPrompt.from_dict(row.value_json)
+    prompt_set = CameraPromptSet.from_dict(row.value_json)
     # Older/partial rows may lack the id; the key is authoritative.
-    if not prompt.camera_id:
-        prompt = CameraPrompt(
-            labels=prompt.labels,
-            prompt_text=prompt.prompt_text,
-            input_ids=prompt.input_ids,
-            attention_mask=prompt.attention_mask,
-            tokenizer=prompt.tokenizer,
-            max_length=prompt.max_length,
+    if not prompt_set.camera_id:
+        prompt_set = CameraPromptSet(
+            queries=prompt_set.queries,
             camera_id=camera_id,
+            tokenizer=prompt_set.tokenizer,
+            max_length=prompt_set.max_length,
         )
-    return prompt
+    return prompt_set
 
 
 def delete_prompt(session: Session, camera_id: str) -> bool:
@@ -156,7 +156,7 @@ def delete_prompt(session: Session, camera_id: str) -> bool:
     return True
 
 
-def list_prompts(session: Session) -> list[CameraPrompt]:
+def list_prompts(session: Session) -> list[CameraPromptSet]:
     """Return every configured camera prompt, ordered by camera id."""
     rows = session.scalars(
         select(SystemMetadata)
@@ -164,7 +164,7 @@ def list_prompts(session: Session) -> list[CameraPrompt]:
         .order_by(SystemMetadata.key)
     ).all()
 
-    prompts: list[CameraPrompt] = []
+    prompts: list[CameraPromptSet] = []
     for row in rows:
         if row.value_json is None:
             continue

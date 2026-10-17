@@ -83,7 +83,9 @@ def set_prompt(
     """
     try:
         prompt = service.set_camera_prompt(
-            session, camera_id, request.labels
+            session,
+            camera_id,
+            [(query.label, query.threshold) for query in request.queries()],
         )
     except PromptEncodingError as exc:
         raise HTTPException(
@@ -94,7 +96,7 @@ def set_prompt(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
         ) from exc
 
-    return PromptResponse.from_prompt(prompt)
+    return PromptResponse.from_set(prompt)
 
 
 @router.get(
@@ -105,7 +107,7 @@ def set_prompt(
 def list_prompts(session: Session = Depends(get_db)) -> PromptListResponse:
     prompts = service.list_camera_prompts(session)
     return PromptListResponse(
-        prompts=[PromptResponse.from_prompt(prompt) for prompt in prompts],
+        cameras=[PromptResponse.from_set(prompt) for prompt in prompts],
         count=len(prompts),
     )
 
@@ -136,7 +138,7 @@ def get_prompt(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"no detection prompt is configured for camera {camera_id!r}",
         )
-    return PromptResponse.from_prompt(prompt)
+    return PromptResponse.from_set(prompt)
 
 
 @router.delete(

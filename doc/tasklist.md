@@ -50,8 +50,9 @@ This list tracks all development tasks required to bring the system from bluepri
   (cgroup-aware thread pool, warmup at worker start): 26.8 s → 10.1 s per frame at the deployed 2-CPU limit.
   Detection *quality* is now verified on a real Apache-2.0 test image
   (`tests/vision/test_detection_quality.py`): 'robot' localises the arm and 'human'/'person' the worker,
-  with the two prompts returning different boxes. Note the single-class export limitation and the
-  threshold finding for human presence in `doc/vision-pipeline.md` §14.
+  with the two prompts returning different boxes. Multi-object detection is one forward pass with
+  every label in the text batch, and each query carries its own threshold, set by the System User
+  through `PUT /cameras/{id}/prompt` (`doc/vision-pipeline.md` §15).
 * ✅ Robot Interface: Modbus RTU/TCP implemented server-side — `protocol.py` (CRC, framing, PDU builders,
   exception decoding), `transports.py` (RS-485 via pyserial, Modbus TCP, and a PDU-accurate simulated
   controller), `service.py` (bounded retries, typed errors, no retry on device refusal) and

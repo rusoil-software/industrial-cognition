@@ -47,10 +47,10 @@ import numpy as np
 
 from src.camera.frames import CapturedFrame
 from src.vision.backend import InferenceBackend, build_backend
-from src.vision.decode import decode_frame
+from src.vision.decode import decode_queries, decode_frame
 from src.vision.detections import FrameResult, StageTimings
 from src.vision.preprocess import PreprocessConfig, decode_image, to_model_input
-from src.vision.prompt import CameraPrompt
+from src.vision.prompt import CameraPrompt, CameraPromptSet, PromptEncodingError
 
 __all__ = ["VisionRuntimeConfig", "VisionWorker", "get_worker", "process_frame_payload"]
 
@@ -165,7 +165,25 @@ class VisionWorker:
         # The dispatcher embeds the camera's prompt in the payload so workers stay
         # stateless. Reading it here is what makes a stored prompt actually affect
         # inference: without this, the prompt is persisted, sent, and ignored.
-        prompt = self._prompt_from_payload(payload)
+        #
+        # An unusable prompt fails the frame instead of falling back to the default.
+        # Falling back would report detections for a *different* class than the one
+        # configured, which is worse than no detection: the operator sees confident
+        # results attributed to the wrong object.
+        try:
+            prompt = self._prompt_from_payload(payload)
+        except PromptEncodingError as exc:
+            logger.error("payload carries an unusable prompt: %s", exc)
+            return {
+                "camera_id": frame.camera_id,
+                "frame_number": frame.frame_number,
+                "capture_ts_ns": frame.capture_ts_ns,
+                "detections": [],
+                "queue_ms": 0.0,
+                "worker_id": self._worker_id,
+                "error": f"unusable prompt: {exc}",
+                "timings": {},
+            }
         return self.process_frame(frame, prompt=prompt).to_wire()
 
     def _prompt_from_payload(self, payload: dict[str, Any]) -> Optional[CameraPrompt]:
@@ -179,16 +197,15 @@ class VisionWorker:
         if not raw:
             return None
         try:
-            return CameraPrompt.from_dict(raw)
+            return CameraPromptSet.from_dict(raw)
         except (PromptEncodingError, AttributeError, TypeError) as exc:
-            logger.warning("ignoring unusable prompt in payload: %s", exc)
-            return None
+            raise PromptEncodingError(str(exc)) from exc
 
 
     def process_frame(
         self,
         frame: CapturedFrame,
-        prompt: "CameraPrompt | None" = None,
+        prompt: "CameraPromptSet | None" = None,
     ) -> FrameResult:
         """Decode, preprocess, infer, decode. Failures become ``error`` results."""
         started_ns = time.time_ns()
@@ -209,11 +226,51 @@ class VisionWorker:
                 error=f"{type(exc).__name__}: {exc}",
             )
 
+    def _decode(self, output: Any, prompt: Optional[CameraPromptSet]) -> list:
+        """Decode the graph's output, honouring per-query thresholds when present.
+
+        With a configured prompt set the output has one class channel per query, so
+        each box is attributed to its best query and compared against *that* query's
+        threshold. Without one (local runs, tests) the backend's single default query
+        applies and the runtime configuration is used.
+        """
+        logits = output.logits
+        pred_boxes = output.pred_boxes
+
+        if prompt is not None:
+            return decode_queries(
+                logits,
+                pred_boxes,
+                labels=prompt.labels,
+                thresholds=prompt.thresholds,
+                iou_threshold=self._config.iou_threshold,
+                max_detections=self._config.max_detections,
+                min_area=self._config.min_area,
+                max_area=self._config.max_area,
+            )
+
+        query_count = int(np.asarray(logits).shape[-1])
+        labels = self._config.labels or ("object",)
+        if len(labels) < query_count:
+            labels = tuple(labels) + tuple(
+                f"class_{index}" for index in range(len(labels), query_count)
+            )
+        return decode_queries(
+            logits,
+            pred_boxes,
+            labels=tuple(labels)[:query_count],
+            thresholds=(self._config.score_threshold,) * query_count,
+            iou_threshold=self._config.iou_threshold,
+            max_detections=self._config.max_detections,
+            min_area=self._config.min_area,
+            max_area=self._config.max_area,
+        )
+
     def _process_frame_checked(
         self,
         frame: CapturedFrame,
         queue_ms: float,
-        prompt: "CameraPrompt | None" = None,
+        prompt: "CameraPromptSet | None" = None,
     ) -> FrameResult:
         config = self._config
 
@@ -224,21 +281,12 @@ class VisionWorker:
 
         started = time.perf_counter()
         output = self._backend.infer(
-            pixel_values, prompt.to_query() if prompt is not None else None
+            pixel_values, prompt
         )
         inference_ms = (time.perf_counter() - started) * 1000.0
 
         started = time.perf_counter()
-        detections = decode_frame(
-            output.logits,
-            output.pred_boxes,
-            labels=config.labels,
-            score_threshold=config.score_threshold,
-            iou_threshold=config.iou_threshold,
-            max_detections=config.max_detections,
-            min_area=config.min_area,
-            max_area=config.max_area,
-        )
+        detections = self._decode(output, prompt)
         decode_ms = (time.perf_counter() - started) * 1000.0
 
         return FrameResult(

@@ -239,10 +239,12 @@ def test_runner_releases_the_source_on_stop() -> None:
 def test_runner_loads_the_camera_prompt_and_passes_it_to_the_model() -> None:
     """A stored prompt must reach inference, not just the database."""
     from tests.vision.test_prompt import FakeTokenizer
-    from src.vision.prompt import encode_prompt
+    from src.vision.prompt import encode_prompt_set
 
     provider = PromptStub()
-    provider.value = encode_prompt(["metal sheet"], FakeTokenizer(), camera_id="cam0")
+    provider.value = encode_prompt_set(
+        [("metal sheet", 0.25)], FakeTokenizer(), camera_id="cam0"
+    )
     runner, backend = build_runner(prompt_provider=provider)
 
     runner.start()
