@@ -82,6 +82,13 @@ spec:
             - configMapRef:
                 name: industrial-cognition-config
           env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: industrial-cognition-secrets, key: REDIS_PASSWORD }
+            # Redis requires a password; the ConfigMap URL has none, so any pod that
+            # submits or reads a Celery result must compose the URL itself.
+            - name: CELERY_RESULT_BACKEND
+              value: "redis://:$(REDIS_PASSWORD)@$(REDIS_HOST):$(REDIS_PORT)/0"
             - name: POSTGRES_USER
               valueFrom:
                 secretKeyRef: { name: industrial-cognition-secrets, key: POSTGRES_USER }

@@ -332,3 +332,36 @@ def test_dispatcher_works_end_to_end_with_the_in_process_transport() -> None:
     results = dispatcher.collect()
     assert len(results) == 5
     assert stats.snapshot()["counters"]["completed"] == 5
+
+
+def test_a_lost_task_expires_instead_of_stalling_the_window() -> None:
+    """A task that never returns must not occupy the window forever.
+
+    A message can be purged, expire, or be lost with an evicted worker. Its AsyncResult
+    then never becomes ready, so without a timeout the entry stays in flight, the window
+    fills, and dispatch() sheds every subsequent frame - a permanent stall from one lost
+    message. Found live: purging the broker queue froze the camera for minutes.
+    """
+    from src.pipeline.stats import PipelineStats
+
+    now = [0.0]
+    stats = PipelineStats()
+    dispatcher = FrameDispatcher(
+        FakeTransport(),
+        stats,
+        max_in_flight=1,
+        task_timeout_ms=1_000.0,
+        clock=lambda: now[0],
+    )
+
+    assert dispatcher.dispatch(make_frame(0)) is True
+    assert dispatcher.in_flight == 1
+    # The window is full, so a second frame is shed while the first is outstanding.
+    assert dispatcher.dispatch(make_frame(1)) is False
+
+    now[0] = 2_000_000_000.0  # two seconds later, still no result
+    dispatcher.collect()
+
+    assert dispatcher.in_flight == 0, 'the lost task should have been dropped'
+    assert stats.snapshot()['counters']['failed'] >= 1
+    assert dispatcher.dispatch(make_frame(2)) is True, 'the window must free up'

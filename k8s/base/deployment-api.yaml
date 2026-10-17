@@ -87,6 +87,10 @@ spec:
             - configMapRef:
                 name: industrial-cognition-config
           env:
+            # The API serves the surface; capture runs in the `camera` Deployment.
+            # Two capture loops would enqueue every frame twice.
+            - name: CAMERA_ENABLED
+              value: "0"
             # `envFrom` deliberately excludes the Secret: credentials are
             # composed here so that each value has exactly one source.
             - name: POSTGRES_USER

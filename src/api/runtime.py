@@ -61,7 +61,9 @@ def _capture_config():  # noqa: ANN202
         source=int(source) if source.isdigit() else source,
         width=int(os.getenv("CAMERA_WIDTH", "1920")),
         height=int(os.getenv("CAMERA_HEIGHT", "1080")),
-        fps=int(os.getenv("CAMERA_FPS", "60")),
+        # Device negotiation wants whole frames per second; the pipeline target
+        # below accepts fractions (0.2 = one frame every five seconds).
+        fps=max(1, int(round(float(os.getenv("CAMERA_FPS", "60"))))),
         jpeg_quality=int(os.getenv("CAMERA_JPEG_QUALITY", "80")),
         encode_max_side=int(os.getenv("CAMERA_ENCODE_MAX_SIDE", "960")),
     )
@@ -97,17 +99,17 @@ def start_pipeline() -> bool:
         return False
 
     try:
-        from src.camera.capture import DeviceFrameSource
+        from src.camera.sources import build_frame_source
         from src.pipeline.runner import PipelineRunner, RunnerConfig
         from src.pipeline.celery_transport import CeleryTransport
 
         config = RunnerConfig(
             capture=_capture_config(),
-            target_fps=int(os.getenv("CAMERA_FPS", "60")),
+            target_fps=float(os.getenv("CAMERA_FPS", "60")),
             max_in_flight=int(os.getenv("PIPELINE_MAX_IN_FLIGHT", "64")),
         )
         runner = PipelineRunner(
-            DeviceFrameSource(config.capture),
+            build_frame_source(config.capture.source, config.capture),
             CeleryTransport(),
             config,
             prompt_provider=_prompt_provider,

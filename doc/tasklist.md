@@ -76,6 +76,13 @@ sheds frames with bounded latency otherwise, both asserted by tests.
 
 ### **Stage 3: Polish & Hardening**
 
+* ✅ Operator console: Vue 3 single-page UI (ui/, no build step) served at /ui/ with a
+  live MJPEG preview, detection overlays and per-camera cognition tasks (one query per
+  object, each with its own threshold). Backend: src/api/stream.py,
+  src/camera/sources.py (including a still-image replay source so the whole pipeline
+  runs without a camera). See doc/operator-console.md. Missing before any network
+  exposure: authentication.
+
 * 🟡 End-to-End Testing: Write and execute full integration tests covering the entire pipeline (Camera -> Vision -> Modbus).
   **Live deployment done (2026-10-17):** the whole stack runs on minikube — all pods `Running`, schema migrated,
   service discovery, prompt repository against real Postgres, and the full

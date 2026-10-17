@@ -168,6 +168,7 @@ class FrameDispatcher:
         stats: PipelineStats,
         *,
         max_in_flight: int = 32,
+        task_timeout_ms: float = 180_000.0,
         clock=time.time_ns,
     ) -> None:
         if max_in_flight < 1:
@@ -177,6 +178,14 @@ class FrameDispatcher:
         self._transport = transport
         self._stats = stats
         self._max_in_flight = max_in_flight
+        # A submitted task normally returns, or fails, or is redelivered. It can
+        # also simply vanish: purged from the broker, expired, dead-lettered, or
+        # lost with an evicted worker. Without a timeout that frame stays in the
+        # in-flight window forever, and since dispatch() sheds when the window is
+        # full, the pipeline stalls permanently on a *lost* message - which is what
+        # happened live after a queue purge. The timeout converts that into a
+        # counted failure.
+        self._task_timeout_ms = float(task_timeout_ms)
         self._pending: list[_Pending] = []
         self._clock = clock
 
@@ -231,6 +240,32 @@ class FrameDispatcher:
         return True
 
     # -- collection --------------------------------------------------------
+    def _expire_stale(self) -> None:
+        """Drop in-flight entries older than the timeout, counting them as failures."""
+        if not self._pending or self._task_timeout_ms <= 0:
+            return
+        now = self._clock()
+        keep = []
+        expired = 0
+        for pending in self._pending:
+            age_ms = (now - pending.dispatched_ns) / 1e6
+            if age_ms > self._task_timeout_ms and not pending.handle.ready():
+                expired += 1
+                logger.warning(
+                    "task %s for frame %s expired after %.0f ms (timeout %.0f ms); "
+                    "dropping it - check the broker, the worker and its acks_late policy",
+                    pending.handle.task_id,
+                    pending.frame.frame_number,
+                    age_ms,
+                    self._task_timeout_ms,
+                )
+                continue
+            keep.append(pending)
+        if expired:
+            self._pending = keep
+            for _ in range(expired):
+                self._stats.record_failure()
+
     def collect(self) -> list[FrameResult]:
         """Return every result ready right now; never blocks.
 
@@ -238,6 +273,7 @@ class FrameDispatcher:
         blocking collect would stall capture - the exact coupling this design
         exists to avoid.
         """
+        self._expire_stale()
         if not self._pending:
             return []
 

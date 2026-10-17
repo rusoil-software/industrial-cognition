@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Industrial Cognition - Operator Console</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="./vendor/vue.global.prod.js"></script>
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="dot" :class="pipelineRunning ? 'ok' : 'warn'"></span>
+          <strong>Industrial Cognition</strong>
+          <span class="muted">Operator Console</span>
+        </div>
+        <div class="status">
+          <span :class="['pill', wsConnected ? 'ok' : 'warn']">
+            websocket {{ wsConnected ? 'live' : 'offline' }}
+          </span>
+          <span :class="['pill', pipelineRunning ? 'ok' : 'warn']">
+            pipeline {{ pipelineRunning ? 'running' : 'degraded' }}
+          </span>
+          <span class="pill neutral">{{ resultFps.toFixed(1) }} results/s</span>
+          <span class="pill neutral">frame {{ lastFrameNumber }}</span>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="stage">
+          <div class="stage-head">
+            <label class="field inline">
+              <span>camera</span>
+              <select v-model="cameraId" @change="onCameraChange">
+                <option v-for="camera in cameras" :key="camera.camera_id" :value="camera.camera_id">
+                  {{ camera.camera_id }}{{ camera.running ? ' (capturing)' : '' }}
+                </option>
+                <option v-if="!cameras.length" :value="cameraId">{{ cameraId }}</option>
+              </select>
+            </label>
+            <input class="newcamera" v-model="newCameraId" placeholder="add camera id" />
+            <button class="ghost" @click="addCamera" :disabled="!newCameraId">add</button>
+            <span class="grow"></span>
+            <span class="muted" v-if="streamError">{{ streamError }}</span>
+          </div>
+
+          <div class="viewport" ref="viewport">
+            <img
+              v-if="streaming"
+              class="feed"
+              :src="streamUrl"
+              alt="camera feed"
+              @load="onFeedLoad"
+              @error="streamError = 'no live frames (is capture running?)'"
+            />
+            <div v-else class="placeholder">
+              <p>No live preview.</p>
+              <p class="muted">
+                Start capture (in this deployment: the camera pod with a replay source) or press
+                "connect" to re-try.
+              </p>
+              <button @click="startStream">connect</button>
+            </div>
+            <canvas ref="overlay" class="overlay"></canvas>
+            <div class="detections-table" v-if="detections.length">
+              <div v-for="(det, index) in detections" :key="index" class="row">
+                <span class="chip" :style="{ background: colourFor(det.object_type) }"></span>
+                <span class="label">{{ det.object_type }}</span>
+                <span class="conf">{{ (det.confidence * 100).toFixed(1) }}%</span>
+              </div>
+            </div>
+            <div class="latency" v-if="timings">
+              inference {{ timings.inference_ms ? timings.inference_ms.toFixed(0) : '-' }} ms
+              · queue {{ timings.queue_ms ? timings.queue_ms.toFixed(0) : '-' }} ms
+            </div>
+          </div>
+        </section>
+
+        <aside class="panel">
+          <h2>Cognition task</h2>
+          <p class="muted">
+            One query per object. Each has its own confidence threshold: keep actuation strict and
+            safety-relevant classes loose.
+          </p>
+
+          <div class="queries">
+            <div class="query" v-for="(query, index) in queries" :key="index">
+              <input v-model="query.label" placeholder="object name, e.g. metal sheet" />
+              <input
+                class="threshold"
+                type="number"
+                min="0.01"
+                max="0.99"
+                step="0.01"
+                v-model.number="query.threshold"
+              />
+              <button class="ghost danger" @click="queries.splice(index, 1)" title="remove">×</button>
+            </div>
+            <button class="ghost" @click="addQuery">+ add object</button>
+          </div>
+
+          <div class="actions">
+            <button class="primary" @click="savePrompts" :disabled="saving || !queries.length">
+              {{ saving ? 'saving…' : 'save task' }}
+            </button>
+            <button class="ghost" @click="loadPrompts">reload</button>
+            <button class="ghost danger" @click="clearPrompts" :disabled="!queries.length">
+              clear
+            </button>
+          </div>
+
+          <p v-if="message" :class="['message', messageKind]">{{ message }}</p>
+
+          <h3>Applied</h3>
+          <table class="applied" v-if="applied.length">
+            <thead>
+              <tr><th>object</th><th>threshold</th><th>tokens</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="query in applied" :key="query.label">
+                <td>{{ query.label }}</td>
+                <td>{{ query.threshold.toFixed(2) }}</td>
+                <td>{{ query.active_tokens }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <p v-else class="muted">No task configured for this camera.</p>
+
+          <h3>Recent results</h3>
+          <table class="applied" v-if="history.length">
+            <thead>
+              <tr><th>frame</th><th>found</th><th>inference</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="entry in history" :key="entry.frame">
+                <td>{{ entry.frame }}</td>
+                <td>{{ entry.summary }}</td>
+                <td>{{ entry.inference }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <p v-else class="muted">Waiting for the first analysed frame…</p>
+        </aside>
+      </main>
+
+      <footer class="footer">
+        <span class="muted">
+          Boxes come from <code>/ws/detections</code>; the image is the MJPEG preview of what the
+          last inference actually saw.
+        </span>
+      </footer>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

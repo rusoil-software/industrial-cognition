@@ -60,6 +60,12 @@ COPY src/ ./src/
 # image without these files makes `alembic upgrade head` fail with "No such file:
 # alembic.ini" and leaves the schema uncreated. The API does not import Alembic at
 # runtime; this exists purely so the migration path is deployable.
+# The operator UI (static, no build step) and the demo/test images used by the
+# replay frame source. Small files, and copying them is what lets one image serve
+# the UI and run a pipeline without a camera attached.
+COPY ui/ ./ui/
+COPY assets/images/ ./assets/images/
+
 COPY alembic.ini ./alembic.ini
 COPY alembic/ ./alembic/
 

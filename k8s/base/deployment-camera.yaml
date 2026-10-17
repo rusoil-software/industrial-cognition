@@ -83,6 +83,32 @@ spec:
             - configMapRef:
                 name: industrial-cognition-config
           env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: industrial-cognition-secrets, key: REDIS_PASSWORD }
+            # Redis requires a password; the ConfigMap URL has none, so any pod that
+            # submits or reads a Celery result must compose the URL itself.
+            - name: CELERY_RESULT_BACKEND
+              value: "redis://:$(REDIS_PASSWORD)@$(REDIS_HOST):$(REDIS_PORT)/0"
+            - name: CAMERA_ENABLED
+              value: "1"
+            # No camera is attached to a development cluster, so the pipeline
+            # replays a still image as if it were a device (src/camera/sources.py).
+            # The frame loop, the queue, the worker and the UI all run for real;
+            # only the pixels are constant. Set to "0" or an RTSP URL for hardware.
+            - name: CAMERA_SOURCE
+              value: "replay:/app/assets/images/roboflow_test_detect_human_robot.webp"
+            # CPU inference costs seconds per frame; capturing at 60 FPS would only
+            # shed frames. 2 FPS keeps the preview alive and the queue shallow.
+            - name: CAMERA_FPS
+              value: "0.2"
+            - name: CAMERA_ID
+              value: "main"
+            # CPU inference costs ~11 s/frame, so a 64-frame window means the newest
+            # frame waits ~10 minutes. The window must be sized from capacity, not left
+            # large: 2 frames keeps end-to-end latency near one inference.
+            - name: PIPELINE_MAX_IN_FLIGHT
+              value: "2"
             - name: POSTGRES_USER
               valueFrom:
                 secretKeyRef: { name: industrial-cognition-secrets, key: POSTGRES_USER }

@@ -37,13 +37,16 @@ pipeline is down is visible in ``/health``.
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from src.api import runtime
 from src.api.prompts.router import router as prompts_router
 from src.api.realtime import router as realtime_router
+from src.api.stream import router as stream_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -74,6 +77,16 @@ app = FastAPI(
 
 app.include_router(prompts_router)
 app.include_router(realtime_router)
+app.include_router(stream_router)
+
+# Operator UI. Served by the API for the MVP so there is one deployment and no
+# CORS surface; a separate static host can replace this mount later without the
+# UI code changing (it only talks to relative URLs).
+app.mount(
+    "/ui",
+    StaticFiles(directory=os.getenv("UI_DIR", "ui"), html=True),
+    name="ui",
+)
 
 
 @app.get("/health", tags=["Health"])

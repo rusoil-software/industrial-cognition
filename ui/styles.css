@@ -1,0 +1,194 @@
+/*
+ * Copyright (c), The Rusoil Software Development Team. All rights reserved.
+ * Licensed under the Apache License, Version 2.0.
+ *
+ * Dark, low-contrast chrome on purpose: the camera image is the subject, and a bright
+ * UI around it makes confidence labels harder to read on a warehouse floor monitor.
+ */
+:root {
+  --bg: #0b1120;
+  --panel: #111a2e;
+  --panel-2: #16213a;
+  --line: #22304d;
+  --text: #e2e8f0;
+  --muted: #8ea1c0;
+  --ok: #4ade80;
+  --warn: #fbbf24;
+  --error: #f87171;
+  --accent: #60a5fa;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+code { font-size: 12px; color: var(--muted); }
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.brand { display: flex; align-items: center; gap: 8px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.dot.ok { background: var(--ok); }
+.dot.warn { background: var(--warn); }
+
+.status { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.pill {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--muted);
+}
+.pill.ok { color: var(--ok); border-color: #1f5c37; }
+.pill.warn { color: var(--warn); border-color: #5c4a1f; }
+.pill.neutral { color: var(--muted); }
+
+.muted { color: var(--muted); }
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 16px;
+  padding: 16px;
+  align-items: start;
+}
+
+@media (max-width: 1100px) {
+  .layout { grid-template-columns: minmax(0, 1fr); }
+}
+
+.stage-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.grow { flex: 1; }
+
+.field.inline { display: inline-flex; align-items: center; gap: 6px; }
+.field span { color: var(--muted); font-size: 12px; }
+
+select, input, button {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+input:focus, select:focus, button:focus { outline: 1px solid var(--accent); }
+
+button { cursor: pointer; }
+button:disabled { opacity: 0.5; cursor: default; }
+button.primary { background: #1d4ed8; border-color: #1d4ed8; }
+button.primary:hover:not(:disabled) { background: #2563eb; }
+button.ghost { background: transparent; }
+button.ghost:hover:not(:disabled) { background: var(--panel-2); }
+button.danger { color: var(--error); }
+
+.newcamera { width: 140px; }
+
+.viewport {
+  position: relative;
+  background: #060b16;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  min-height: 420px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.feed {
+  display: block;
+  max-width: 100%;
+  max-height: 74vh;
+  object-fit: contain;
+}
+
+.overlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.placeholder { text-align: center; padding: 32px; }
+
+.detections-table {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  display: grid;
+  gap: 4px;
+  background: rgba(6, 11, 22, 0.78);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  max-width: 240px;
+}
+.detections-table .row { display: flex; align-items: center; gap: 8px; }
+.chip { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.detections-table .label { flex: 1; }
+.detections-table .conf { color: var(--muted); }
+
+.latency {
+  position: absolute;
+  bottom: 10px;
+  right: 10px;
+  font-size: 12px;
+  color: var(--muted);
+  background: rgba(6, 11, 22, 0.78);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+}
+.panel h2 { margin: 0 0 4px; font-size: 15px; }
+.panel h3 { margin: 18px 0 6px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+
+.queries { display: grid; gap: 6px; margin: 10px 0; }
+.query { display: grid; grid-template-columns: 1fr 76px 32px; gap: 6px; }
+.query .threshold { text-align: right; }
+
+.actions { display: flex; gap: 6px; margin-top: 8px; }
+
+.message { margin: 10px 0 0; padding: 6px 8px; border-radius: 6px; font-size: 12px; }
+.message.ok { background: #12341f; color: var(--ok); }
+.message.error { background: #3a1620; color: var(--error); }
+
+table.applied { width: 100%; border-collapse: collapse; font-size: 12px; }
+table.applied th {
+  text-align: left;
+  color: var(--muted);
+  font-weight: 500;
+  border-bottom: 1px solid var(--line);
+  padding: 4px 2px;
+}
+table.applied td { padding: 4px 2px; border-bottom: 1px solid #1a2438; }
+
+.footer { padding: 0 16px 16px; }

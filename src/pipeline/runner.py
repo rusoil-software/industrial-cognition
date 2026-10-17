@@ -50,7 +50,7 @@ from src.pipeline.broadcast import ResultBroadcaster
 from src.pipeline.dispatcher import FrameDispatcher
 from src.pipeline.stats import PipelineStats
 
-__all__ = ["PipelineRunner", "RunnerConfig"]
+__all__ = ["LatestFrame", "PipelineRunner", "RunnerConfig"]
 
 logger = logging.getLogger(__name__)
 
@@ -61,14 +61,35 @@ DEFAULT_PROMPT_REFRESH_SECONDS = 5.0
 
 
 @dataclass(frozen=True, slots=True)
+class LatestFrame:
+    """The most recent encoded frame, kept so a browser can see what the model saw.
+
+    Frames otherwise live only as a task payload: by the time a result comes back the
+    JPEG has been consumed. Keeping the last one costs a few hundred kilobytes and is
+    what makes an overlay UI (and "what did it actually look at?") possible.
+    """
+
+    jpeg: bytes
+    frame_number: int
+    capture_ts_ns: int
+    width: int
+    height: int
+
+
+@dataclass(frozen=True, slots=True)
 class RunnerConfig:
     capture: CaptureConfig = CaptureConfig()
-    target_fps: int = 60
+    # float: a CPU-only worker may only manage a frame every few seconds, and
+    # "one frame per 5 s" is 0.2 FPS - an int would round that to zero.
+    target_fps: float = 60.0
     prompt_refresh_seconds: float = DEFAULT_PROMPT_REFRESH_SECONDS
     #: Maximum frames in flight before the dispatcher sheds load.
     max_in_flight: int = 64
     #: Stop waiting for in-flight work after this long on shutdown.
     drain_timeout_ms: float = 5000.0
+    #: A submitted frame that has not returned by now is assumed lost. Must be
+    #: comfortably larger than one inference, or healthy slow frames are killed.
+    task_timeout_ms: float = 180_000.0
 
 
 class PipelineRunner:
@@ -95,12 +116,17 @@ class PipelineRunner:
             transport,
             self._stats,
             max_in_flight=self._config.max_in_flight,
+            task_timeout_ms=self._config.task_timeout_ms,
         )
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._prompt: Optional[Any] = None
         self._prompt_fetched_at = 0.0
         self._prompt_errors = 0
+        self._latest: Optional[LatestFrame] = None
+        # Assignment of a whole immutable object is atomic enough: a reader sees
+        # either the previous frame or the new one, never a half-written buffer.
+        self._latest_lock = threading.Lock()
 
     # -- lifecycle ---------------------------------------------------------
     @property
@@ -163,7 +189,7 @@ class PipelineRunner:
     def _run(self) -> None:
         config = self._config
         camera_id = config.capture.camera_id
-        interval = 1.0 / max(1, config.target_fps)
+        interval = 1.0 / max(0.01, float(config.target_fps))
         frame_number = 0
         next_at = time.perf_counter()
         logger.info("capture loop started for camera %s", camera_id)
@@ -184,6 +210,14 @@ class PipelineRunner:
                 frame = None
 
             if frame is not None:
+                with self._latest_lock:
+                    self._latest = LatestFrame(
+                        jpeg=frame.jpeg,
+                        frame_number=frame.frame_number,
+                        capture_ts_ns=frame.capture_ts_ns,
+                        width=frame.width,
+                        height=frame.height,
+                    )
                 self._stats.record_capture()
                 self._stats.record_encode(frame.encode_ms)
                 prompt = self._current_prompt(camera_id)
@@ -235,6 +269,11 @@ class PipelineRunner:
             logger.exception("failed to publish frame %s", getattr(result, "frame_number", "?"))
 
     # -- introspection -----------------------------------------------------
+    def latest_frame(self) -> Optional[LatestFrame]:
+        """The most recent encoded frame, or ``None`` before the first one."""
+        with self._latest_lock:
+            return self._latest
+
     def snapshot(self) -> dict[str, Any]:
         """Combined pipeline + fan-out state for /status and /health."""
         return {
