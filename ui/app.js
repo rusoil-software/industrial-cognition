@@ -49,6 +49,9 @@ createApp({
     const message = ref("");
     const messageKind = ref("ok");
     const resultFps = ref(0);
+    const authenticated = ref(false);
+    const tokenInput = ref("");
+    const signingIn = ref(false);
     const viewport = ref(null);
     const overlay = ref(null);
 
@@ -80,6 +83,10 @@ createApp({
         body = text ? JSON.parse(text) : null;
       } catch (error) {
         body = { detail: text };
+      }
+      if (response.status === 401) {
+        authenticated.value = false;
+        throw new Error("authentication required");
       }
       if (!response.ok) {
         const detail = body && body.detail ? body.detail : response.statusText;
@@ -256,6 +263,38 @@ createApp({
         .join(", ");
     }
 
+    async function signIn() {
+      signingIn.value = true;
+      try {
+        await api("/auth/login", {
+          method: "POST",
+          body: JSON.stringify({ token: tokenInput.value.trim() }),
+        });
+        tokenInput.value = "";
+        authenticated.value = true;
+        await refreshCameras();
+        await loadPrompts();
+        startStream();
+        connect();
+      } catch (error) {
+        flash(error.message === "authentication required" ? "invalid token" : error.message, "error");
+      } finally {
+        signingIn.value = false;
+      }
+    }
+
+    async function signOut() {
+      try {
+        await api("/auth/login", { method: "DELETE" });
+      } catch (error) {
+        // A failed sign-out still drops the local view.
+      }
+      authenticated.value = false;
+      if (socket) socket.close();
+      socket = null;
+      streaming.value = false;
+    }
+
     function connect() {
       const scheme = window.location.protocol === "https:" ? "wss" : "ws";
       socket = new WebSocket(`${scheme}://${window.location.host}/ws/detections`);
@@ -310,6 +349,13 @@ createApp({
     }
 
     onMounted(async () => {
+      try {
+        const status = await api("/auth/status");
+        authenticated.value = status.authenticated || !status.required;
+      } catch (error) {
+        authenticated.value = false;
+      }
+      if (!authenticated.value) return;
       await refreshCameras();
       await loadPrompts();
       startStream();
@@ -323,6 +369,11 @@ createApp({
     });
 
     return {
+      authenticated,
+      tokenInput,
+      signingIn,
+      signIn,
+      signOut,
       cameras,
       cameraId,
       newCameraId,

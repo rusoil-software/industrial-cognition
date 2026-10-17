@@ -1,0 +1,16 @@
+# A NodePort, so the console can be opened at http://<node-ip>:30080/ui/ without a
+# port-forward. On Docker Desktop the node IP may need `minikube ip` plus a route, or
+# `minikube service api -n cogni-ns` (which tunnels); the port-forward remains the
+# fallback and is documented in doc/operator-console.md.
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: cogni-ns
+  name: api
+spec:
+  type: NodePort
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      nodePort: 30080

@@ -69,3 +69,7 @@ patches:
     path: patches/model-cache-storage-size.yaml
   # Reduce the inference footprint for a CPU-only box.
   - path: patches/vision-dev-resources.yaml
+  # Dev-only: the console needs capture in the pod that serves HTTP.
+  - path: patches/console-single-pod.yaml
+  - path: patches/camera-disabled.yaml
+  - path: patches/api-nodeport.yaml

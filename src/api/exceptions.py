@@ -15,3 +15,16 @@
 # author : Konstantin Ustiuzhanin
 # date   : 2026-Apr-23
 # ==============================================================================
+
+from __future__ import annotations
+
+__all__ = ["AuthError"]
+
+
+class AuthError(Exception):
+    """A session is missing, malformed, expired or signed with the wrong key.
+
+    Deliberately one class, and deliberately without detail in its message: telling an
+    unauthenticated caller *which* part of a token failed helps only an attacker. The
+    router translates it into a bare 401.
+    """

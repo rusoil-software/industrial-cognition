@@ -1,0 +1,28 @@
+# The console needs the frame buffer and the WebSocket in the same process that
+# serves HTTP. Running capture in the API pod for dev gives one URL, one Service and no
+# cross-pod frame plumbing; production keeps capture separate (deployment-camera).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: cogni-ns
+  name: api
+spec:
+  # One replica: two capture loops would enqueue every frame twice, and the frame buffer
+  # is per-process anyway.
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: api
+          env:
+            - name: CAMERA_ENABLED
+              value: "1"
+            - name: CAMERA_SOURCE
+              value: "replay:/app/assets/images/roboflow_test_detect_human_robot.webp"
+            - name: CAMERA_ID
+              value: "main"
+            # CPU inference is ~11 s/frame, so capture slowly and keep the window small.
+            - name: CAMERA_FPS
+              value: "0.2"
+            - name: PIPELINE_MAX_IN_FLIGHT
+              value: "2"

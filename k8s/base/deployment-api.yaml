@@ -87,6 +87,12 @@ spec:
             - configMapRef:
                 name: industrial-cognition-config
           env:
+            - name: AUTH_TOKEN
+              valueFrom:
+                secretKeyRef: { name: industrial-cognition-secrets, key: AUTH_TOKEN }
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef: { name: industrial-cognition-secrets, key: JWT_SECRET }
             # The API serves the surface; capture runs in the `camera` Deployment.
             # Two capture loops would enqueue every frame twice.
             - name: CAMERA_ENABLED

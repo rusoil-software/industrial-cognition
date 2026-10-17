@@ -1,0 +1,9 @@
+# Capture runs in the api pod in dev (patches/console-single-pod.yaml); a second loop
+# here would double every frame in the queue.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: cogni-ns
+  name: camera
+spec:
+  replicas: 0

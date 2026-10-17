@@ -45,6 +45,9 @@ from fastapi.staticfiles import StaticFiles
 
 from src.api import runtime
 from src.api.prompts.router import router as prompts_router
+from src.api.auth_routes import guard as auth_guard
+from src.api.auth_routes import router as auth_router
+from src.api.auth import get_settings as auth_settings
 from src.api.realtime import router as realtime_router
 from src.api.stream import router as stream_router
 
@@ -55,6 +58,16 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # noqa: ARG001 - required signature
     """Start the pipeline if possible; always allow the API to serve."""
+    settings = auth_settings()
+    if settings.enabled and not settings.login_token:
+        logger.warning(
+            "AUTH_REQUIRED is on but AUTH_TOKEN is empty: the console cannot be "
+            "logged into and every data endpoint will answer 401"
+        )
+    elif not settings.enabled:
+        logger.warning(
+            "AUTH_REQUIRED=0 - this deployment is UNAUTHENTICATED; do not expose it"
+        )
     if runtime.start_pipeline():
         logger.info("vision pipeline started")
     else:
@@ -78,6 +91,34 @@ app = FastAPI(
 app.include_router(prompts_router)
 app.include_router(realtime_router)
 app.include_router(stream_router)
+app.include_router(auth_router)
+
+
+@app.middleware("http")
+async def require_session(request, call_next):
+    """Guard every data endpoint unless a session is present.
+
+    Public: /health (Kubernetes probes), /auth/* (how a session is obtained) and
+    the static console shell (which carries no cell data). Everything else -
+    cameras, frames, prompts, stats - needs the cookie, a bearer token or
+    ?token=. A middleware rather than per-route dependencies so that a route
+    added later is protected by default; forgetting a dependency is exactly how
+    an endpoint ends up public.
+    """
+    from src.api.auth import is_protected
+    from fastapi.responses import JSONResponse
+
+    if request.url.path.startswith("/ws"):
+        # WebSockets are not HTTP requests; the handler checks the session itself.
+        return await call_next(request)
+    if is_protected(request.url.path):
+        try:
+            auth_guard(request)
+        except Exception:
+            return JSONResponse(
+                {"detail": "authentication required"}, status_code=401
+            )
+    return await call_next(request)
 
 # Operator UI. Served by the API for the MVP so there is one deployment and no
 # CORS surface; a separate static host can replace this mount later without the

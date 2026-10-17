@@ -24,10 +24,34 @@
           </span>
           <span class="pill neutral">{{ resultFps.toFixed(1) }} results/s</span>
           <span class="pill neutral">frame {{ lastFrameNumber }}</span>
+          <button class="ghost" @click="signOut">sign out</button>
         </div>
       </header>
 
-      <main class="layout">
+      <section class="login-gate" v-if="!authenticated">
+        <div class="login-card">
+          <h1>Industrial Cognition</h1>
+          <p class="muted">
+            Enter the deployment token. It is exchanged for a short-lived session cookie, the
+            same way Jupyter Lab works.
+          </p>
+          <form @submit.prevent="signIn">
+            <input
+              type="password"
+              v-model="tokenInput"
+              placeholder="AUTH_TOKEN"
+              autocomplete="current-password"
+              autofocus
+            />
+            <button class="primary" type="submit" :disabled="signingIn || !tokenInput">
+              {{ signingIn ? 'signing in…' : 'sign in' }}
+            </button>
+          </form>
+          <p v-if="message" :class="['message', messageKind]">{{ message }}</p>
+        </div>
+      </section>
+
+      <main class="layout" v-if="authenticated">
         <section class="stage">
           <div class="stage-head">
             <label class="field inline">

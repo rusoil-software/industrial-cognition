@@ -40,6 +40,9 @@ import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from src.api import runtime
+from src.api.auth import get_settings as auth_settings
+from src.api.auth_routes import session_from_request
+from src.api.exceptions import AuthError
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +67,15 @@ async def detections_stream(websocket: WebSocket) -> None:
     distinguish "connected, nothing detected yet" from "connected but capture is
     not running".
     """
+    # WebSockets bypass the HTTP middleware, so the session is checked here. The
+    # browser sends the cookie automatically for same-origin sockets; ?token= is
+    # accepted as well because a WebSocket handshake cannot set headers.
+    try:
+        session_from_request(websocket, auth_settings())
+    except AuthError:
+        await websocket.close(code=1008, reason="authentication required")
+        return
+
     await websocket.accept()
 
     runner = runtime.get_runner()
