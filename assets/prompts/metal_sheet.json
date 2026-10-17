@@ -1,0 +1,44 @@
+{
+  "labels": [
+    "metal sheet"
+  ],
+  "prompt_text": "metal sheet.",
+  "input_ids": [
+    49406,
+    4044,
+    7298,
+    269,
+    49407,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "attention_mask": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "tokenizer": "transformers:google/owlv2-base-patch16-ensemble",
+  "max_length": 16
+}

@@ -430,3 +430,63 @@ With the real prompt, the synthetic test scene still yields no detections (best 
 0.0018 against a 0.25 threshold). That is the correct answer: it is a grey rectangle,
 not a metal sheet. Detection *quality* remains the one thing that needs a real camera
 image, not more pipeline work.
+
+---
+
+## 14. Prompt conditioning on a real image
+
+The first real photograph in the repository
+(`assets/images/roboflow_test_detect_human_robot.webp`, Apache 2.0) closes the gap that
+remained after §13: an overhead warehouse scene with a robot arm and a worker, far
+enough apart that "did it look at the right thing" is answerable.
+
+Each prompt was tokenised **through the live API** (`scripts/dump_prompts.py` PUTs it,
+reads back the IDs), then run against the image with the real model
+(`scripts/evaluate_prompts.py`).
+
+| Prompt | Top score | Box centre | Landed on |
+| --- | --- | --- | --- |
+| `robot` | 0.322 | (0.63, 0.30) | **robot arm** |
+| `person` | 0.324 | (0.57, 0.58) | **worker** |
+| `human` | 0.188 | (0.57, 0.58) | **worker** |
+| `cardboard box` | 0.452 | (0.71, 0.38) | a stack of boxes |
+| `metal sheet` | 0.272 | (0.75, 0.06) | conveyor/grating area |
+
+`robot` and `human` are asked for the same image and return boxes ~0.28 apart
+vertically, each on the correct subject. That is prompt conditioning working: a decoder
+that ignored its text input would return the same box for every phrase - which is
+exactly the failure the -65504 saturation produced earlier, and which no
+plumbing test would have caught.
+
+This is now a regression test: `tests/vision/test_detection_quality.py` (marked
+`model`, skipped when the 293 MiB artifact is absent) asserts that `robot` finds the
+arm, that both `human` and `person` find the worker, and that the two prompts do not
+return the same box.
+
+### The single-class limitation
+
+The artifact's `logits` are `(1, 3600, 1)`: **one** class dimension. The graph scores
+one query at a time, so:
+
+* prompt conditioning is visible as *where* the best box is and how confident it is,
+  not as a per-class label;
+* a prompt with several labels reports every box as `labels[0]`, because there is no
+  second class channel to attribute boxes to;
+* `VISION_LABELS` therefore works as a *name* for the one class, not as a vocabulary.
+
+Supporting multi-class prompts means re-exporting the model with a wider text/class
+dimension, which is an export-side change (`requirements/export.txt`), not a pipeline
+one.
+
+### Threshold finding (safety-relevant)
+
+With the shipped `VISION_SCORE_THRESHOLD=0.25`, **`human` would not be reported**
+(0.188), while `robot`, `person`, `cardboard box` and `metal sheet` would. For a
+metal-sheet pick-and-place MVP that default is fine; for a human-presence interlock it
+is not. Two honest options, both better than silently lowering the number globally:
+
+1. give each camera its own threshold alongside its prompt, or
+2. keep 0.25 for actuation and use a lower threshold (0.15) for the interlock path.
+
+The measured scores are recorded here so that whichever is chosen is a decision, not an
+accident.

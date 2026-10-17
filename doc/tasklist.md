@@ -48,7 +48,10 @@ This list tracks all development tasks required to bring the system from bluepri
   *Caveat resolved:* the default prompt is now genuinely CLIP-tokenised (`k8s/dev/text_queries.json`), the
   tokenizer is baked into the API image so prompts can be set offline over HTTP, and the runtime was tuned
   (cgroup-aware thread pool, warmup at worker start): 26.8 s → 10.1 s per frame at the deployed 2-CPU limit.
-  Detection *quality* still needs a real camera image; see `doc/vision-pipeline.md` §13.
+  Detection *quality* is now verified on a real Apache-2.0 test image
+  (`tests/vision/test_detection_quality.py`): 'robot' localises the arm and 'human'/'person' the worker,
+  with the two prompts returning different boxes. Note the single-class export limitation and the
+  threshold finding for human presence in `doc/vision-pipeline.md` §14.
 * ✅ Robot Interface: Modbus RTU/TCP implemented server-side — `protocol.py` (CRC, framing, PDU builders,
   exception decoding), `transports.py` (RS-485 via pyserial, Modbus TCP, and a PDU-accurate simulated
   controller), `service.py` (bounded retries, typed errors, no retry on device refusal) and
