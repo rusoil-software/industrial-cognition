@@ -84,6 +84,23 @@ kubectl get --raw /healthz --request-timeout=15s >/dev/null 2>&1 \
     || die "the Kubernetes API server is not answering." \
            "  Recreate the cluster: minikube delete && ./install.sh"
 
+# The cluster can be up and still unusable: if minikube's addons failed while the API
+# server was starting, there is no default StorageClass, every PVC stays Pending, and the
+# install fails later with a misleading scheduling error.
+step "checking the default StorageClass"
+default_sc="$(kubectl get storageclass -o jsonpath='{range .items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")]}{.metadata.name}{end}' 2>/dev/null || true)"
+if [[ -z "${default_sc}" ]]; then
+    printf '    none found; re-enabling the storage addons\n'
+    minikube addons enable storage-provisioner >/dev/null 2>&1 || true
+    minikube addons enable default-storageclass >/dev/null 2>&1 || true
+    default_sc="$(kubectl get storageclass -o jsonpath='{range .items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")]}{.metadata.name}{end}' 2>/dev/null || true)"
+fi
+[[ -n "${default_sc}" ]] || die "no default StorageClass: PersistentVolumeClaims would stay Pending." \
+    "  This usually means the node was too small for minikube's addons:
+      minikube delete && minikube start --memory=12288 --cpus=8
+  then re-run ./install.sh.  ./scripts/cluster-doctor.ps1 -Fix diagnoses this on Windows."
+printf '    %s\n' "${default_sc}"
+
 step "building and loading images"
 "${REPO_ROOT}/k8s/scripts/build-images.sh" --tag dev --load-minikube
 

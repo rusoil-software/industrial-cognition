@@ -135,8 +135,16 @@ if (-not $SkipCluster) {
     minikube update-context | Out-Null
 }
 
-Invoke-Checked "cluster is reachable" { kubectl get --raw /healthz --request-timeout=15s | Out-Null }
-Ok "API server reachable"
+# The cluster can be up and still be unusable: if minikube's addons failed while the
+# API server was coming up, there is no default StorageClass, every PVC stays Pending,
+# and the install fails much later with a misleading scheduling error. The doctor
+# checks the dependencies in order and repairs the addons.
+$doctor = Join-Path $RepoRoot "scripts/cluster-doctor.ps1"
+& $doctor -Fix
+if ($LASTEXITCODE -ne 0) {
+    Fail "the cluster is not ready (see the doctor output above)."
+}
+Ok "cluster ready"
 
 # --------------------------------------------------------------------------- #
 # 3. images

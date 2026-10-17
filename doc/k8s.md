@@ -610,3 +610,50 @@ Detection quality is still unverified: the prompt on that PVC is a placeholder
 (`k8s/dev/text_queries.placeholder.json`), so scores are ~0.008 and nothing clears the
 threshold. That is the expected result of a meaningless prompt, not a pipeline fault;
 `doc/vision-pipeline.md` §13 has the numbers.
+
+---
+
+## Cluster doctor: when the cluster is up but unusable
+
+A minikube cluster can start successfully and still be unable to host this stack. The
+message to recognise:
+
+```
+Enabling 'storage-provisioner' returned an error: running callbacks:
+  failed to download openapi: Get "https://localhost:8443/openapi/v2": dial tcp [::1]:8443: connect: connection refused
+Enabling 'default-storageclass' returned an error: ... same openapi error ...
+```
+
+`minikube start` exited 0, the addons did not apply, and the cluster now has **no default
+StorageClass**. Nothing that needs a volume can start: every `PersistentVolumeClaim` stays
+`Pending`, so `postgres-0` never schedules (`pod does not have a host assigned`), and the
+install fails much later with a scheduling error that points nowhere near the cause.
+
+The `connection refused` on `:8443` is the API server inside the node not answering while
+minikube applied its addons - almost always because the node is too small for the control
+plane plus the addons.
+
+### Diagnose and repair
+
+```powershell
+./scripts/cluster-doctor.ps1        # diagnose
+./scripts/cluster-doctor.ps1 -Fix   # re-enable the addons once the API server is up
+```
+
+It checks in dependency order - minikube host, API server from the host, node `Ready`,
+default StorageClass - and only then attempts the addons, so a repair happens *after* the
+condition that broke them has passed. The installer runs it automatically (`install.ps1`
+calls `-Fix`; `install.sh` performs the same StorageClass check), so a fresh install fails
+at the real cause rather than three steps downstream.
+
+If it still reports no StorageClass, the node needs more room:
+
+```sh
+minikube delete
+minikube start --driver=docker --memory=12288 --cpus=8
+./scripts/cluster-doctor.ps1 -Fix
+```
+
+A note on why this is a resource problem and not a code one: the stack runs Postgres,
+RabbitMQ, Redis, MinIO, the API, the vision worker and (in a full run) a 293 MiB ONNX
+model in one VM. 8 GiB is the practical floor; 12 GiB is comfortable.
