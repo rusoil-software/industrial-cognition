@@ -62,6 +62,25 @@ function Fail([string]$Message, [string]$Hint = "") {
     exit 1
 }
 
+# Native commands write progress and deprecation notices to stderr, and under
+# $ErrorActionPreference = 'Stop' PowerShell 5.1 turns *any* stderr line from a native
+# program into a terminating NativeCommandError. That is exactly what killed this script:
+# "Warning: v1 Endpoints is deprecated in v1.33+" was treated as a fatal error at the
+# readiness check. Shadowing `kubectl` with a function that swallows stderr and
+# re-publishes the exit code fixes it once, instead of at every call site, and keeps
+# stdout parsing intact.
+function kubectl {
+    $app = Get-Command kubectl.exe -CommandType Application -ErrorAction SilentlyContinue
+    if (-not $app) {
+        $app = Get-Command kubectl -CommandType Application -ErrorAction SilentlyContinue
+    }
+    if (-not $app) { throw "kubectl is not on PATH" }
+
+    $output = & $app.Source @args 2>$null
+    $global:LASTEXITCODE = $LASTEXITCODE
+    return $output
+}
+
 function Test-Cluster {
     $null = kubectl get --raw /healthz --request-timeout=10s 2>&1
     if ($LASTEXITCODE -ne 0) {
@@ -94,14 +113,76 @@ function Get-ConsoleToken {
     }
 }
 
+function Get-ReadyEndpointAddresses {
+    <#
+        Ready endpoint addresses for a Service, via EndpointSlices.
+
+        JSON, not `-o jsonpath`, deliberately: kubectl's jsonpath needs a quoted newline
+        ({end}{"\n"}), and PowerShell strips the inner double quotes when building a
+        native command line, so kubectl receives a bare \n and fails with "unrecognized
+        character in action: U+005C". Parsing JSON sidesteps Windows quoting entirely.
+
+        EndpointSlices rather than v1 Endpoints because the latter is deprecated from
+        v1.33 and prints a warning on every call; a slice also carries per-endpoint
+        readiness, which is the question actually being asked.
+    #>
+    param([string]$Namespace, [string]$Service)
+
+    $json = kubectl -n $Namespace get endpointslice `
+        -l "kubernetes.io/service-name=$Service" --request-timeout=10s -o json 2>$null
+    if ([string]::IsNullOrWhiteSpace($json)) { return @() }
+
+    try {
+        $parsed = $json | ConvertFrom-Json
+    } catch {
+        return @()
+    }
+
+    $addresses = @()
+    foreach ($slice in $parsed.items) {
+        foreach ($endpoint in $slice.endpoints) {
+            # `conditions` may be absent on older API versions; treat that as ready.
+            if ($null -eq $endpoint.conditions -or $endpoint.conditions.ready -ne $false) {
+                $addresses += $endpoint.addresses
+            }
+        }
+    }
+    return $addresses
+}
+
+function Find-FreePort {
+    <#
+        First free local port at or after $Preferred.
+
+        A previous run that died leaves an orphan `kubectl port-forward` holding 8080. The
+        next run then starts kubectl, which fails to bind and either exits or (worse) stays
+        alive while forwarding to a pod that no longer exists - the symptom was "the API
+        did not answer within 60s" with a healthy cluster. Probing for a free port is
+        cheaper and safer than hunting for stale processes to kill.
+    #>
+    param([int]$Preferred, [int]$Range = 20)
+
+    for ($candidate = $Preferred; $candidate -lt ($Preferred + $Range); $candidate++) {
+        $listener = $null
+        try {
+            $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $candidate)
+            $listener.Start()
+            return $candidate
+        } catch {
+            continue
+        } finally {
+            if ($listener) { $listener.Stop() }
+        }
+    }
+    Fail "no free port in ${Preferred}..$($Preferred + $Range)"
+}
+
 function Wait-ForEndpoints {
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     $announced = $false
     while ((Get-Date) -lt $deadline) {
-        $endpoints = kubectl -n $Namespace get endpoints $Service `
-            --request-timeout=10s -o jsonpath='{.subsets[*].addresses[*].ip}' 2>$null
-        if (-not [string]::IsNullOrWhiteSpace($endpoints)) {
-            return $true
+        if ((Get-ReadyEndpointAddresses -Namespace $Namespace -Service $Service).Count -gt 0) {
+            return
         }
 
         if (-not $announced) {
@@ -135,15 +216,23 @@ Write-Host ""
 
 Test-Cluster
 $token = Get-ConsoleToken
-$url = "http://127.0.0.1:$Port/auth/login?token=$([uri]::EscapeDataString($token))"
-$console = "http://127.0.0.1:$Port/ui/"
 
 if ($PrintOnly) {
-    Write-Output $url
+    Write-Output "http://127.0.0.1:$Port/auth/login?token=$([uri]::EscapeDataString($token))"
     exit 0
 }
 
 Wait-ForEndpoints
+
+# Bind a port that is actually free: a previous run that died leaves an orphan forward
+# holding 8080, and reusing it produces a confusing "did not answer within 60s".
+$requested = $Port
+$Port = Find-FreePort -Preferred $Port
+if ($Port -ne $requested) {
+    Write-Warn "port $requested is busy; using $Port instead"
+}
+$url = "http://127.0.0.1:$Port/auth/login?token=$([uri]::EscapeDataString($token))"
+$console = "http://127.0.0.1:$Port/ui/"
 
 Write-Step "forwarding $Namespace/$Service to 127.0.0.1:$Port"
 $logOut = Join-Path ([IO.Path]::GetTempPath()) "cogni-portforward.out"

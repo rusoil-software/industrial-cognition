@@ -63,7 +63,12 @@ param(
     [switch]$NoConsole
 )
 
-$ErrorActionPreference = "Stop"
+# "Continue", not "Stop": under Stop, PowerShell 5.1 turns *any* stderr line from a native
+# program (kubectl and minikube both emit deprecation notices and progress there) into a
+# terminating NativeCommandError. That killed the console launcher on kubectl's
+# "v1 Endpoints is deprecated" warning. Every step below checks $LASTEXITCODE explicitly
+# through Invoke-Checked/Fail, so a real failure still stops the install.
+$ErrorActionPreference = "Continue"
 # install.ps1 lives at the repository root, so $PSScriptRoot IS the root. Taking its
 # parent - the natural-looking choice - walks above the checkout, and `docker build .`
 # then fails with "The system cannot find the file specified" for src/.
