@@ -199,7 +199,11 @@ class FrameDispatcher:
         return len(self._pending) >= self._max_in_flight
 
     # -- dispatch ----------------------------------------------------------
-    def dispatch(self, frame: CapturedFrame) -> bool:
+    def dispatch(
+        self,
+        frame: CapturedFrame,
+        prompt: Any = None,
+    ) -> bool:
         """Submit *frame* for analysis.
 
         Returns:
@@ -212,7 +216,14 @@ class FrameDispatcher:
             self._stats.record_drop_capacity()
             return False
 
-        handle = self._transport.submit(frame.to_payload())
+        payload = frame.to_payload()
+        if prompt is not None:
+            # The prompt travels with the frame so workers stay stateless:
+            # no shared cache to invalidate across pods when a user changes it.
+            payload["prompt"] = (
+                prompt.to_dict() if hasattr(prompt, "to_dict") else prompt
+            )
+        handle = self._transport.submit(payload)
         self._pending.append(
             _Pending(handle=handle, frame=frame, dispatched_ns=self._clock())
         )

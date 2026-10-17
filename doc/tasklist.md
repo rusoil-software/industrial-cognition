@@ -50,7 +50,10 @@ This list tracks all development tasks required to bring the system from bluepri
   dummy tokens; see `doc/vision-pipeline.md` §6.
 * 🟡 Robot Interface: Not started in this pass. The Modbus service and command manager remain the stubs from
   `src/robot/`; the pipeline produces `Detection` objects ready for it.
-* 🟡 Orchestration: Multi-worker dispatch implemented and load tested — bounded in-flight window with
+* 🟡 Orchestration: Per-camera prompt API implemented (`src/api/prompts/`: put/get/delete/list at
+  `/cameras/{camera_id}/prompt`), tokenised through `src/vision/prompt.py`, stored in
+  `system_metadata` via `src/api/storage/prompt_repository.py`, and carried in each frame payload so a
+  prompt applies only to its own camera. Multi-worker dispatch implemented and load tested — bounded in-flight window with
   load shedding, capture/dispatch/completion FPS and latency percentiles (`src/pipeline/`), Celery task and
   transport, and the 60 FPS acceptance tests (`tests/pipeline`, 28 tests). **Remaining:** wire the dispatcher
   into the FastAPI app; replace the stub bootstrap in `src/api/main.py`, which currently initialises camera,

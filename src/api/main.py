@@ -32,7 +32,13 @@ from src.camera.schemas import CameraConfig, StreamingPayload
 from src.camera.schemas import DetectionResult, FrameMetadata
 from src.camera.constants import DEFAULT_FPS
 
+from src.api.prompts.router import router as prompts_router
+
 app = FastAPI(title="Industrial Cognition Core API")
+
+# Per-camera detection prompts, set by the System User
+# (PUT/GET/DELETE /cameras/{camera_id}/prompt). See doc/vision-pipeline.md §11.
+app.include_router(prompts_router)
 
 # --- Global State ---
 # State management for all initialized services

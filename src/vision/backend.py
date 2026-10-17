@@ -194,8 +194,17 @@ class InferenceBackend(Protocol):
     def warmup(self) -> None:
         """Run one throwaway inference so the first real frame is not slow."""
 
-    def infer(self, pixel_values: np.ndarray) -> InferenceOutput:
-        """Run inference on a ``(N, 3, H, W)`` float32 batch."""
+    def infer(
+        self,
+        pixel_values: np.ndarray,
+        text_query: "TextQuery | None" = None,
+    ) -> InferenceOutput:
+        """Run inference on a ``(N, 3, H, W)`` float32 batch.
+
+        ``text_query`` overrides the configured prompt for this call,
+        which is how a per-camera prompt reaches the graph. Backends that
+        do not consume text accept and ignore it.
+        """
 
     def close(self) -> None:
         """Release resources."""
@@ -246,6 +255,7 @@ class Owl2OnnxBackend:
         self._session = None
         self._input_ids: Optional[np.ndarray] = None
         self._attention_mask: Optional[np.ndarray] = None
+        self._text_length: Optional[int] = None
         self._providers: tuple[str, ...] = ()
 
     # -- lifecycle ---------------------------------------------------------
@@ -302,6 +312,7 @@ class Owl2OnnxBackend:
             expected_length = text_input.shape[-1]
         if self._text_query is None:
             self._text_query = load_text_query()
+        self._text_length = expected_length
         self._input_ids, self._attention_mask = self._text_query.as_arrays(
             expected_length
         )
@@ -337,7 +348,11 @@ class Owl2OnnxBackend:
     def text_query(self) -> Optional[TextQuery]:
         return self._text_query
 
-    def infer(self, pixel_values: np.ndarray) -> InferenceOutput:
+    def infer(
+        self,
+        pixel_values: np.ndarray,
+        text_query: TextQuery | None = None,
+    ) -> InferenceOutput:
         session = self._ensure_session()
         if pixel_values.ndim != 4:
             raise ValueError(
@@ -349,8 +364,12 @@ class Owl2OnnxBackend:
             pixel_values = pixel_values.astype(np.float32, copy=False)
 
         batch = pixel_values.shape[0]
-        ids = self._input_ids
-        mask = self._attention_mask
+        if text_query is not None:
+            # Per-camera prompt: validated against the graph's text length.
+            ids, mask = text_query.as_arrays(self._text_length)
+        else:
+            ids = self._input_ids
+            mask = self._attention_mask
         if batch != 1:
             ids = np.repeat(ids, batch, axis=0)
             mask = np.repeat(mask, batch, axis=0)
@@ -410,7 +429,12 @@ class SyntheticBackend:
     def close(self) -> None:  # pragma: no cover - nothing to release
         return
 
-    def infer(self, pixel_values: np.ndarray) -> InferenceOutput:
+    def infer(
+        self,
+        pixel_values: np.ndarray,
+        text_query: TextQuery | None = None,
+    ) -> InferenceOutput:
+        del text_query  # no text conditioning in the synthetic backend
         if self._simulate_latency_ms > 0:
             time.sleep(self._simulate_latency_ms / 1000.0)
 

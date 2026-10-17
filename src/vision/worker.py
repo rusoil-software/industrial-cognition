@@ -50,6 +50,7 @@ from src.vision.backend import InferenceBackend, build_backend
 from src.vision.decode import decode_frame
 from src.vision.detections import FrameResult, StageTimings
 from src.vision.preprocess import PreprocessConfig, decode_image, to_model_input
+from src.vision.prompt import CameraPrompt
 
 __all__ = ["VisionRuntimeConfig", "VisionWorker", "get_worker", "process_frame_payload"]
 
@@ -162,13 +163,17 @@ class VisionWorker:
             }
         return self.process_frame(frame).to_wire()
 
-    def process_frame(self, frame: CapturedFrame) -> FrameResult:
+    def process_frame(
+        self,
+        frame: CapturedFrame,
+        prompt: "CameraPrompt | None" = None,
+    ) -> FrameResult:
         """Decode, preprocess, infer, decode. Failures become ``error`` results."""
         started_ns = time.time_ns()
         queue_ms = max(0.0, (started_ns - frame.capture_ts_ns) / 1e6)
 
         try:
-            return self._process_frame_checked(frame, queue_ms)
+            return self._process_frame_checked(frame, queue_ms, prompt)
         except Exception as exc:  # noqa: BLE001 - a bad frame must not kill the worker
             logger.exception(
                 "frame %s from %s failed", frame.frame_number, frame.camera_id
@@ -183,7 +188,10 @@ class VisionWorker:
             )
 
     def _process_frame_checked(
-        self, frame: CapturedFrame, queue_ms: float
+        self,
+        frame: CapturedFrame,
+        queue_ms: float,
+        prompt: "CameraPrompt | None" = None,
     ) -> FrameResult:
         config = self._config
 
@@ -193,7 +201,9 @@ class VisionWorker:
         preprocess_ms = (time.perf_counter() - started) * 1000.0
 
         started = time.perf_counter()
-        output = self._backend.infer(pixel_values)
+        output = self._backend.infer(
+            pixel_values, prompt.to_query() if prompt is not None else None
+        )
         inference_ms = (time.perf_counter() - started) * 1000.0
 
         started = time.perf_counter()

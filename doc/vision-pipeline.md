@@ -234,3 +234,61 @@ Not verified here, and why:
 3. Tokenise the real prompt and validate detection quality on a captured frame
    from the actual camera.
 4. Size the worker pool from measured GPU latency; enable the KEDA scaler.
+
+---
+
+## 11. Setting the prompt from the API
+
+The System User sets what one camera looks for; the service tokenises it and stores
+it against that camera. A later web interface is expected to call exactly these
+endpoints.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `PUT` | `/cameras/{camera_id}/prompt` | Tokenise `{"labels": ["metal sheet"]}` and store it for that camera |
+| `GET` | `/cameras/{camera_id}/prompt` | Read back the prompt **and its token IDs** |
+| `DELETE` | `/cameras/{camera_id}/prompt` | Clear it |
+| `GET` | `/cameras/prompts` | List every configured camera |
+
+Status codes are deliberate: **422** when the prompt cannot tokenise into usable
+conditioning (blank name, an embedded period, or padding-only tokens), **503** when
+this deployment has no tokenizer configured, **404** when no prompt is set.
+
+```sh
+curl -X PUT http://localhost:8000/cameras/main/prompt \
+  -H 'content-type: application/json' \
+  -d '{"labels": ["metal sheet"]}'
+```
+
+```json
+{"camera_id": "main", "labels": ["metal sheet"], "prompt_text": "metal sheet.",
+ "input_ids": [49406, 3208, 2368, 49407, ...], "attention_mask": [1, 1, 1, 1, 0, ...],
+ "tokenizer": "transformers:google/owlv2-base-patch16-ensemble",
+ "max_length": 16, "active_tokens": 4}
+```
+
+Returning the tokens is not decoration: it is how an operator confirms that
+"metal sheet" did not tokenise into something unexpected, which is the difference
+between a configured system and a confidently misconfigured one.
+
+**Storage.** One row in `system_metadata`, key `camera_prompt:<camera_id>`, the
+human-readable prompt in `value` and the full encoding in `value_json`. The table
+exists for system-level state that grows with the product, so no migration was
+needed; if prompts later gain history or relationships, a dedicated table plus an
+Alembic revision is the next step.
+
+**How it reaches the model.** The dispatcher embeds the encoding in the frame
+payload (`payload["prompt"]`), so every task carries the prompt for *its* camera and
+workers stay stateless - no shared cache to invalidate across pods when a user
+changes a prompt mid-stream. `Owl2OnnxBackend.infer(..., text_query=...)` then
+applies it for that call instead of the process-wide default.
+
+**Prompt lifecycle.** A prompt applies to frames captured *after* it is stored;
+in-flight frames keep the prompt they were dispatched with. That is intentional:
+retroactively re-prompting frames already in the queue would make results depend on
+when a human clicked save.
+
+**Tokenisation is offline-first.** `PROMPT_TOKENIZER_MODEL` selects the checkpoint
+and `PROMPT_TOKENIZER_LOCAL_ONLY=1` (the default) forbids a runtime download, which
+an air-gapped industrial network requires. The tokenizer files must therefore be
+baked into the API image or mounted beside the model.
