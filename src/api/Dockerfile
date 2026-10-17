@@ -30,6 +30,26 @@ COPY requirements/api.txt requirements/api.txt
 # Install core dependencies
 RUN pip install --no-cache-dir -r requirements/api.txt
 
+# Bake the CLIP tokenizer used by the prompt API.
+#
+# The System User sets a prompt over HTTP and the service tokenises it, so the
+# tokenizer has to be present wherever the API runs. Downloading it on first use is
+# not acceptable: an industrial network has no egress at runtime, and a prompt request
+# that depends on reaching HuggingFace would fail exactly when it is needed.
+#
+# Baking it at build time (where the network is available) is what makes
+# `PROMPT_TOKENIZER_LOCAL_ONLY=1` - the runtime default - actually work. Only the
+# tokenizer is fetched; the model itself is not part of this image.
+ENV HF_HOME=/app/.hf
+RUN python -c "\
+from transformers import AutoTokenizer; \
+tokenizer = AutoTokenizer.from_pretrained('google/owlv2-base-patch16-ensemble'); \
+print('baked tokenizer:', tokenizer.name_or_path)" \
+ && chmod -R a+rX /app/.hf
+
+# Offline by default: read the cached tokenizer, never call out.
+ENV PROMPT_TOKENIZER_LOCAL_ONLY=1
+
 # Copy the entire source code structure
 COPY src/ ./src/
 

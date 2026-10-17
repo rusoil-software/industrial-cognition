@@ -23,3 +23,8 @@ pyserial==3.5
 opencv-python-headless==4.11.0.86
 celery==5.6.3
 redis==7.2
+
+# Prompt tokenisation: the System User sets a detection prompt over HTTP and the API
+# tokenises it (doc/vision-pipeline.md section 11). Tokenizer only - this must not
+# drag in torch, because this image has no inference stack.
+transformers==5.20.1

@@ -57,6 +57,14 @@ def main() -> None:
     warmup_ms = (time.perf_counter() - started) * 1000.0
     print(f"warmup    : {warmup_ms:.0f} ms")
     print(f"providers : {getattr(backend, '_providers', 'n/a')}")
+    try:
+        options = backend._session.get_session_options()
+        print(
+            f"threads   : intra_op={options.intra_op_num_threads} "
+            f"inter_op={options.inter_op_num_threads}"
+        )
+    except Exception:  # noqa: BLE001 - diagnostics only
+        pass
 
     image = synthetic_scene()
     pixel_values = to_model_input(image, PreprocessConfig(width=960, height=960))

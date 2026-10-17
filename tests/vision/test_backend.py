@@ -35,6 +35,8 @@ from src.vision.backend import (
     SyntheticBackend,
     TextQuery,
     build_backend,
+    cgroup_cpu_limit,
+    effective_cpu_count,
     load_text_query,
 )
 
@@ -42,6 +44,16 @@ from src.vision.backend import (
 # --------------------------------------------------------------------------- #
 # TextQuery
 # --------------------------------------------------------------------------- #
+# The real CLIP tokenisation of "metal sheet." (scripts/encode_text_queries.py),
+# padded to the graph's 16-token budget. Using the genuine IDs in tests keeps them
+# honest about the padding convention: CLIP pads with 0, not with EOS.
+SAMPLE_QUERY = TextQuery(
+    labels=("metal_sheet",),
+    input_ids=(49406, 4044, 7298, 269, 49407) + (0,) * 11,
+    attention_mask=(1,) * 5 + (0,) * 11,
+)
+
+
 def test_text_query_rejects_all_zero_tokens() -> None:
     """Zero is the padding token; only padding yields no detections at all."""
     with pytest.raises(ValueError, match="padding"):
@@ -268,3 +280,70 @@ def test_build_backend_explains_a_missing_text_query(monkeypatch, scratch) -> No
     monkeypatch.setenv("OWL2_TEXT_IDS_PATH", str(scratch / "absent.json"))
     with pytest.raises(FileNotFoundError, match="encode_text_queries"):
         build_backend("owl2", model_path=scratch / "model.onnx")
+
+
+# --------------------------------------------------------------------------- #
+# Runtime tightening
+# --------------------------------------------------------------------------- #
+def test_cgroup_v2_quota_is_read(scratch) -> None:
+    """A pod limited to 2 cores must ask ONNX Runtime for 2 threads, not the node's."""
+    (scratch / "cpu.max").write_text("200000 100000", encoding="utf-8")
+    assert cgroup_cpu_limit(scratch) == 2
+
+
+def test_cgroup_v2_quota_is_rounded_up(scratch) -> None:
+    (scratch / "cpu.max").write_text("150000 100000", encoding="utf-8")
+    assert cgroup_cpu_limit(scratch) == 2  # 1.5 cores needs 2 threads to use
+
+
+def test_cgroup_v2_unlimited_returns_none(scratch) -> None:
+    (scratch / "cpu.max").write_text("max 100000", encoding="utf-8")
+    assert cgroup_cpu_limit(scratch) is None
+
+
+def test_cgroup_v1_quota_is_read(scratch) -> None:
+    inner = scratch / "cpu"
+    inner.mkdir()
+    (inner / "cpu.cfs_quota_us").write_text("400000", encoding="utf-8")
+    (inner / "cpu.cfs_period_us").write_text("100000", encoding="utf-8")
+    assert cgroup_cpu_limit(scratch) == 4
+
+
+def test_cgroup_v1_unlimited_returns_none(scratch) -> None:
+    inner = scratch / "cpu"
+    inner.mkdir()
+    (inner / "cpu.cfs_quota_us").write_text("-1", encoding="utf-8")
+    (inner / "cpu.cfs_period_us").write_text("100000", encoding="utf-8")
+    assert cgroup_cpu_limit(scratch) is None
+
+
+def test_cgroup_absent_returns_none(scratch) -> None:
+    """No cgroup files (a bare host) must not raise, just report no limit."""
+    assert cgroup_cpu_limit(scratch / "nothing-here") is None
+
+
+def test_effective_cpu_count_is_at_least_one() -> None:
+    assert effective_cpu_count() >= 1
+
+
+def test_explicit_thread_count_overrides_the_environment() -> None:
+    backend = Owl2OnnxBackend(
+        "model.onnx", text_query=SAMPLE_QUERY, intra_op_threads=3
+    )
+    assert backend._intra_op_threads == 3
+
+
+def test_cuda_provider_gets_tuning_options() -> None:
+    """CUDA is passed as (name, options) so arena growth stays demand-driven."""
+    backend = Owl2OnnxBackend("model.onnx", text_query=SAMPLE_QUERY)
+    spec = backend._provider_spec(["CUDAExecutionProvider", "CPUExecutionProvider"])
+
+    assert spec[0][0] == "CUDAExecutionProvider"
+    assert spec[0][1]["arena_extend_strategy"] == "kSameAsRequested"
+    assert spec[0][1]["cudnn_conv_algo_search"] == "HEURISTIC"
+    assert spec[1] == "CPUExecutionProvider"
+
+
+def test_cpu_provider_spec_is_unchanged() -> None:
+    backend = Owl2OnnxBackend("model.onnx", text_query=SAMPLE_QUERY)
+    assert backend._provider_spec(["CPUExecutionProvider"]) == ["CPUExecutionProvider"]

@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import time
 from dataclasses import dataclass
@@ -210,6 +211,54 @@ class InferenceBackend(Protocol):
         """Release resources."""
 
 
+def cgroup_cpu_limit(root: str | Path = "/sys/fs/cgroup") -> Optional[int]:
+    """CPU limit imposed by the cgroup, in whole cores, or ``None`` if unlimited.
+
+    Reads cgroup v2 (``cpu.max``) and falls back to v1 (``cpu.cfs_quota_us`` /
+    ``cpu.cfs_period_us``). Returns ``None`` for ``max`` / ``-1``, meaning this process
+    may use the whole machine. ``root`` is injectable so the parsing is testable
+    without being inside a container.
+    """
+    base = Path(root)
+    try:
+        v2 = base / "cpu.max"
+        if v2.exists():
+            fields = v2.read_text(encoding="utf-8").split()
+            if len(fields) == 2 and fields[0] != "max":
+                quota, period = int(fields[0]), int(fields[1])
+                if quota > 0 and period > 0:
+                    return max(1, math.ceil(quota / period))
+            return None
+        quota_file = base / "cpu" / "cpu.cfs_quota_us"
+        period_file = base / "cpu" / "cpu.cfs_period_us"
+        if quota_file.exists() and period_file.exists():
+            quota = int(quota_file.read_text(encoding="utf-8").strip())
+            period = int(period_file.read_text(encoding="utf-8").strip())
+            if quota > 0 and period > 0:
+                return max(1, math.ceil(quota / period))
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def effective_cpu_count() -> int:
+    """Threads this process should use: the cgroup limit, else the affinity mask.
+
+    ``os.cpu_count()`` reports the host's cores, which is the wrong answer inside a
+    pod. ``OWL2_INTRA_OP_THREADS`` still overrides both.
+    """
+    limit = cgroup_cpu_limit()
+    if limit is not None:
+        return limit
+    try:
+        affinity = len(os.sched_getaffinity(0))  # type: ignore[attr-defined]
+        if affinity > 0:
+            return affinity
+    except (AttributeError, OSError):
+        pass
+    return max(1, os.cpu_count() or 1)
+
+
 class Owl2OnnxBackend:
     """OWLv2 on ONNX Runtime.
 
@@ -275,6 +324,30 @@ class Owl2OnnxBackend:
             return ["CUDAExecutionProvider", "CPUExecutionProvider"]
         return ["CPUExecutionProvider"]
 
+    def _provider_spec(self, chosen: list[str]) -> list:
+        """Providers with per-provider options for session creation.
+
+        The CUDA options are the ones that matter on a small laptop GPU: growing the
+        arena only as requested avoids pinning a large block up front, and the
+        heuristic convolution search is far cheaper than exhaustive on first run.
+        """
+        spec: list = []
+        for name in chosen:
+            if name == "CUDAExecutionProvider":
+                spec.append(
+                    (
+                        name,
+                        {
+                            "arena_extend_strategy": "kSameAsRequested",
+                            "cudnn_conv_algo_search": "HEURISTIC",
+                            "do_copy_in_default_stream": "1",
+                        },
+                    )
+                )
+            else:
+                spec.append(name)
+        return spec
+
     def _ensure_session(self):
         if self._session is not None:
             return self._session
@@ -286,21 +359,46 @@ class Owl2OnnxBackend:
 
         providers = self._provider_choice()
         options = ort.SessionOptions()
-        if self._intra_op_threads:
-            options.intra_op_num_threads = self._intra_op_threads
-        # Keep the graph optimiser at the default level: EXTENDED is applied
-        # automatically for the CUDA provider, and re-applying it on every worker
-        # start would add seconds to each replica's cold start for no benefit.
 
-        logger.info("loading OWLv2 from %s with providers %s", self._model_path, providers)
+        # Thread count is the single biggest lever on CPU throughput, and the default
+        # is wrong in a container: ONNX Runtime sizes its intra-op pool from the
+        # *node's* physical cores, not the pod's CPU limit. On this cluster that is
+        # 20 threads inside a pod limited to 2, so the pool spends its time in
+        # scheduler contention and cache thrash. Honour the cgroup quota instead.
+        threads = self._intra_op_threads or effective_cpu_count()
+        options.intra_op_num_threads = max(1, threads)
+        # One frame at a time per process: sequential execution keeps memory flat and
+        # avoids a second pool competing for the same cores.
+        options.inter_op_num_threads = int(os.getenv("OWL2_INTER_OP_THREADS", "1"))
+        options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        # ORT_ENABLE_ALL is the default, but state it: `scripts/inspect_model.py`
+        # reports latency from a plain session, and a pipeline that silently runs with
+        # optimisations off looks like a slow model rather than a misconfiguration.
+        options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        # Reuse the allocation arena across frames. At ~7 s per frame on CPU the arena
+        # would otherwise be returned to the OS and re-acquired every time.
+        options.enable_mem_pattern = True
+        options.enable_cpu_mem_arena = True
+        options.log_severity_level = 3
+
+        logger.info(
+            "loading OWLv2 from %s with providers %s (intra_op=%d, inter_op=%d)",
+            self._model_path,
+            providers,
+            options.intra_op_num_threads,
+            options.inter_op_num_threads,
+        )
         started = time.perf_counter()
-        session = ort.InferenceSession(str(self._model_path), options, providers=providers)
+        session = ort.InferenceSession(
+            str(self._model_path), options, providers=self._provider_spec(providers)
+        )
         self._session = session
         self._providers = tuple(session.get_providers())
         logger.info(
-            "OWLv2 loaded in %.1fs using %s",
+            "OWLv2 loaded in %.1fs using %s with %d intra-op thread(s)",
             time.perf_counter() - started,
             self._providers,
+            session.get_session_options().intra_op_num_threads,
         )
 
         # The text inputs are static per deployment: validate once, then reuse.

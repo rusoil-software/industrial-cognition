@@ -379,3 +379,54 @@ meaningless prompt, not a defect in the pipeline. Producing real conditioning ne
   autoscale-up produces no detections for the first ~11 s. `VisionWorker.warmup()`
   exists for this; the deployment should call it at startup rather than on the first
   request.
+
+### Real prompts and tightened runtime (same day, second pass)
+
+Two changes, both measured in the cluster.
+
+**1. Real CLIP tokenisation.** `scripts/encode_text_queries.py` was run against
+`google/owlv2-base-patch16-ensemble` and produced the genuine encoding of the default
+prompt:
+
+```
+metal sheet.  ->  [49406, 4044, 7298, 269, 49407, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+                 (5 active tokens; CLIP pads with 0, not with EOS)
+```
+
+That differs completely from the earlier placeholder, which is why placeholder scores
+were meaningless. The tokenizer is now **baked into the API image at build time** with
+`HF_HOME=/app/.hf`, so `PROMPT_TOKENIZER_LOCAL_ONLY=1` works on an air-gapped network:
+the prompt API tokenises without any runtime download. Verified offline inside the
+image: the same five IDs come back with `local_files_only=True`.
+
+The whole chain now runs live: `PUT /cameras/main/prompt` returned **200** with those
+IDs, `GET` returned the same encoding, a prompt containing a period still returned
+**422**, and `DELETE` returned **204**.
+
+**2. Thread sizing was the dominant runtime cost.** ONNX Runtime sizes its intra-op
+pool from the *node's* physical cores, and this node reports 20 - inside a pod limited
+to 2. The pool spent its time in scheduler contention. `effective_cpu_count()` now
+reads the cgroup quota (v2 `cpu.max`, v1 `cpu.cfs_quota_us`/`cpu.cfs_period_us`) and
+falls back to the affinity mask, with `OWL2_INTRA_OP_THREADS` as an override. Sessions
+also get sequential execution, one inter-op thread, `ORT_ENABLE_ALL` stated explicitly,
+and a persistent allocation arena; CUDA gets `kSameAsRequested` arena growth and the
+heuristic cuDNN search.
+
+| Configuration | Before | After | Change |
+| --- | --- | --- | --- |
+| 2 CPU worker (as deployed) | 26.8 s/frame | **10.1 s/frame** | 2.6x faster |
+| 6 CPU probe | 7.5-7.8 s/frame | **4.6-5.0 s/frame** | 1.6x faster |
+| Model load | 11.4-11.8 s | 7.5 s (12.2 s incl. warmup pass) | - |
+
+`--concurrency=1` remains a memory requirement, not a preference: one session peaks at
+~3.4 GiB, and each prefork child loads its own.
+
+**3. Warmup moved to worker startup.** `worker_process_init` now loads the model in
+each child as it starts (`VISION_WARMUP` disables it). The log line
+`vision backend warmed in 12.2s` appears before the worker accepts its first task, so a
+cold scale-up no longer pays the model load on the first frame.
+
+With the real prompt, the synthetic test scene still yields no detections (best score
+0.0018 against a 0.25 threshold). That is the correct answer: it is a grey rectangle,
+not a metal sheet. Detection *quality* remains the one thing that needs a real camera
+image, not more pipeline work.

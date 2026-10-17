@@ -38,6 +38,7 @@ import os
 from typing import Any
 
 from celery import Celery
+from celery.signals import worker_process_init
 from kombu import Queue
 
 logger = logging.getLogger(__name__)
@@ -120,3 +121,35 @@ def process_frame(self, payload: dict[str, Any]) -> dict[str, Any]:  # noqa: ARG
     from src.vision.worker import process_frame_payload
 
     return process_frame_payload(payload)
+
+
+@worker_process_init.connect
+def _warm_vision_model(**_kwargs: Any) -> None:
+    """Load the model in each prefork child as it starts, not on the first frame.
+
+    Measured in-cluster, the first inference in a fresh process costs ~11.5 s of ONNX
+    Runtime session setup on top of the frame itself (doc/vision-pipeline.md §13). On a
+    cold autoscale-up that means the first frames after a scale-out event are delayed by
+    the model load rather than by the work, which is exactly when latency matters.
+
+    Doing it here also makes the cost visible: a worker that cannot load its model fails
+    its startup probe instead of accepting tasks it cannot serve. Failures are logged
+    and swallowed deliberately - a missing model should degrade the worker, not stop it
+    from connecting to the broker, so the reason is visible in the pod status rather
+    than in a crash loop.
+    """
+    if os.getenv("VISION_WARMUP", "1").strip().lower() in ("0", "false", "no"):
+        logger.info("model warmup disabled by VISION_WARMUP")
+        return
+    try:
+        from src.vision.worker import get_worker
+
+        started = __import__("time").perf_counter()
+        get_worker().warmup()
+        logger.info(
+            "vision backend warmed in %.1fs", __import__("time").perf_counter() - started
+        )
+    except Exception:  # noqa: BLE001 - see the docstring
+        logger.exception(
+            "vision backend warmup failed; tasks will fail until the model is available"
+        )

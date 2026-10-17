@@ -45,9 +45,10 @@ This list tracks all development tasks required to bring the system from bluepri
   (`src/vision/preprocess.py`), graph decoding (`src/vision/decode.py`: centre→corner, sigmoid, NMS, fp16),
   backend seam (`src/vision/backend.py`) and the per-frame worker (`src/vision/worker.py`). The model contract
   was read from the artifact with `scripts/inspect_model.py`. 72 tests in `tests/vision`.
-  *Caveat:* real detections additionally need a tokenised prompt
-  (`scripts/encode_text_queries.py` → `OWL2_TEXT_IDS_PATH`), because the artifact was exported with random
-  dummy tokens; see `doc/vision-pipeline.md` §6.
+  *Caveat resolved:* the default prompt is now genuinely CLIP-tokenised (`k8s/dev/text_queries.json`), the
+  tokenizer is baked into the API image so prompts can be set offline over HTTP, and the runtime was tuned
+  (cgroup-aware thread pool, warmup at worker start): 26.8 s → 10.1 s per frame at the deployed 2-CPU limit.
+  Detection *quality* still needs a real camera image; see `doc/vision-pipeline.md` §13.
 * ✅ Robot Interface: Modbus RTU/TCP implemented server-side — `protocol.py` (CRC, framing, PDU builders,
   exception decoding), `transports.py` (RS-485 via pyserial, Modbus TCP, and a PDU-accurate simulated
   controller), `service.py` (bounded retries, typed errors, no retry on device refusal) and
