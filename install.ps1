@@ -184,6 +184,15 @@ Step "running database migrations as a Job"
 $jobName = "alembic-migrate"
 kubectl -n $Namespace delete job $jobName --ignore-not-found --request-timeout=30s | Out-Null
 
+# Postgres must be *ready* before the Job is created. Creating it first "works" only
+# because the Job retries: the first three attempts were lost to
+# "connection to server ... port 5432 failed: Connection refused", and the fourth
+# succeeded. That is three wasted minutes and a scary log full of tracebacks for anyone
+# reading it. Waiting first turns it into one clean run.
+Invoke-Checked "postgres ready" {
+    kubectl -n $Namespace wait --for=condition=ready pod/postgres-0 --timeout=300s
+}
+
 $job = @"
 apiVersion: batch/v1
 kind: Job
@@ -209,10 +218,6 @@ $jobPath = Join-Path ([IO.Path]::GetTempPath()) "cogni-migrate-job.yaml"
 $job | Set-Content -Path $jobPath -Encoding utf8
 Invoke-Checked "migration job" { kubectl apply -f $jobPath --request-timeout=60s }
 
-# Wait for postgres to be ready first; the Job's own retries would mask the reason.
-Invoke-Checked "postgres ready" {
-    kubectl -n $Namespace wait --for=condition=ready pod/postgres-0 --timeout=240s
-}
 Invoke-Checked "migration completed" {
     kubectl -n $Namespace wait --for=condition=complete "job/$jobName" --timeout=300s
 }
