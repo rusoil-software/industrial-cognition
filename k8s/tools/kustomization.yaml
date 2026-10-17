@@ -1,0 +1,47 @@
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# author : Konstantin Ustiuzhanin
+# date   : 2026-Oct-17
+# ==============================================================================
+#
+# Operator toolbox: one-shot pods used to inspect or seed a running environment.
+#
+# This is deliberately NOT part of `k8s/overlays/dev` or `k8s/overlays/prod`. These
+# pods are not workload - they are things a human applies for a few minutes and then
+# deletes:
+#
+#   model-loader      mounts the model-cache PVC read-write so an artifact can be
+#                     copied in (the Deployment mounts it readOnly, correctly).
+#   inference-probe   runs one ONNX session against that artifact with a generous
+#                     memory limit, to measure latency and RSS without disturbing
+#                     the worker or being cut off by its limits.
+#
+# Applying either of them to an environment is a deliberate action, so they must
+# never be pulled in by an overlay. The kustomization exists only so `kustomize
+# build k8s/tools` renders them and so the repository's manifest-coverage check can
+# see them; nothing references it.
+#
+#   kubectl apply -f k8s/tools/model-loader.yaml
+#   kubectl -n cogni-ns cp <artifact> model-loader:/models/<name>
+#   kubectl -n cogni-ns delete pod model-loader
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: cogni-ns
+
+resources:
+  - model-loader.yaml
+  - inference-probe.yaml

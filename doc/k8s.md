@@ -584,3 +584,29 @@ The real OWLv2 model (the `model-cache` PVC is empty and there is no GPU in the
 cluster), real camera capture, and the Modbus transports. The `vision` worker ran
 with `VISION_BACKEND=synthetic` for the task smoke test and was returned to the
 `owl2` default afterwards.
+
+### Second pass: the real model on the PVC
+
+The `model-cache` PVC was populated from a workstation with a temporary
+read-write pod (`k8s/tools/model-loader.yaml`; the Deployment mounts it readOnly, which
+is correct) and the real 293 MiB artifact was exercised in-cluster:
+
+* the backend loaded in 11.4-11.8 s and ran on `CPUExecutionProvider`;
+* one inference took 26.8 s through Celery at the 2 CPU limit, and 7.5-7.8 s in a
+  6 CPU probe pod;
+* peak RSS for one session was **3432 MiB**, so the dev 4 GiB limit was too tight -
+  a second session in the same pod was OOMKilled (exit 137). Raised to 6 GiB;
+* logits came back finite (-41.8 to -4.8), so the graph is not in the -65504
+  saturation state, and the top decoded box matched the drawn rectangle almost
+  exactly, which validates the geometry path.
+
+A seventh bug surfaced here: `build_backend()` never loaded the text query from
+`OWL2_TEXT_IDS_PATH`. It passed `text_query=None` together with `VISION_LABELS` and
+tripped its own "labels= requires a text_query" check, so **every real task failed** -
+while all unit tests passed, because they inject a `TextQuery` explicitly. The
+deployed backend was unconstructible until the first live task proved it.
+
+Detection quality is still unverified: the prompt on that PVC is a placeholder
+(`k8s/dev/text_queries.placeholder.json`), so scores are ~0.008 and nothing clears the
+threshold. That is the expected result of a meaningless prompt, not a pipeline fault;
+`doc/vision-pipeline.md` §13 has the numbers.

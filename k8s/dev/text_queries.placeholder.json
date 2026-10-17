@@ -1,0 +1,45 @@
+{
+  "labels": [
+    "metal_sheet"
+  ],
+  "prompt": "metal sheet.",
+  "tokenizer": "placeholder:not-a-clip-encoding",
+  "max_length": 16,
+  "note": "Placeholder IDs for an infrastructure smoke test; detections from this file are meaningless. Run scripts/encode_text_queries.py for real conditioning.",
+  "input_ids": [
+    49406,
+    3208,
+    2368,
+    2369,
+    49407,
+    49407,
+    49407,
+    49407,
+    49407,
+    49407,
+    49407,
+    49407,
+    49407,
+    49407,
+    49407,
+    49407
+  ],
+  "attention_mask": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ]
+}

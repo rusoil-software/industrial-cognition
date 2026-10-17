@@ -175,9 +175,32 @@ def test_build_backend_selects_the_synthetic_backend() -> None:
     assert isinstance(build_backend("synthetic"), SyntheticBackend)
 
 
-def test_build_backend_defaults_to_the_real_backend(monkeypatch) -> None:
+def test_build_backend_defaults_to_the_real_backend(monkeypatch, scratch) -> None:
+    """The default kind is `owl2`, not the synthetic stand-in.
+
+    A tokenised prompt is supplied because `build_backend` now loads it from
+    OWL2_TEXT_IDS_PATH when the caller does not pass one - which is the behaviour
+    that makes the deployed backend constructible at all.
+    """
+    import json
+
+    path = scratch / "text_queries.json"
+    path.write_text(
+        json.dumps(
+            {
+                "labels": ["metal_sheet"],
+                "input_ids": [49406, 3208, 2368] + [49407] * 13,
+                "attention_mask": [1, 1, 1] + [0] * 13,
+            }
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.delenv("VISION_BACKEND", raising=False)
+    monkeypatch.setenv("OWL2_TEXT_IDS_PATH", str(path))
+    monkeypatch.setenv("OWL2_MODEL_PATH", str(scratch / "model.onnx"))
+
     backend = build_backend()
+
     assert isinstance(backend, Owl2OnnxBackend)
 
 
@@ -210,3 +233,38 @@ def test_real_backend_rejects_an_unavailable_provider(scratch) -> None:
     backend = Owl2OnnxBackend(model, execution_provider="CUDAExecutionProvider")
     with pytest.raises(RuntimeError, match="not available"):
         backend.warmup()
+
+
+def test_build_backend_loads_the_text_query_from_the_configured_path(monkeypatch, scratch) -> None:
+    """The deployed backend must construct itself from OWL2_TEXT_IDS_PATH.
+
+    Regression: build_backend passed text_query=None together with VISION_LABELS and
+    tripped its own "labels= requires a text_query" check, so every real task failed
+    in the cluster while every unit test passed (they inject a TextQuery).
+    """
+    import json
+
+    path = scratch / "text_queries.json"
+    path.write_text(
+        json.dumps(
+            {
+                "labels": ["metal_sheet"],
+                "input_ids": [49406, 3208, 2368, 2369, 49407] + [49407] * 11,
+                "attention_mask": [1, 1, 1, 1, 1] + [0] * 11,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OWL2_TEXT_IDS_PATH", str(path))
+    monkeypatch.setenv("VISION_LABELS", "metal_sheet")
+
+    backend = build_backend("owl2", model_path=scratch / "model.onnx")
+
+    assert backend.name == "owl2-onnx"
+    assert backend._text_query.labels == ("metal_sheet",)
+
+
+def test_build_backend_explains_a_missing_text_query(monkeypatch, scratch) -> None:
+    monkeypatch.setenv("OWL2_TEXT_IDS_PATH", str(scratch / "absent.json"))
+    with pytest.raises(FileNotFoundError, match="encode_text_queries"):
+        build_backend("owl2", model_path=scratch / "model.onnx")

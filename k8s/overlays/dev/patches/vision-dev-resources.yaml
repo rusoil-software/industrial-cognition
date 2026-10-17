@@ -49,7 +49,12 @@ spec:
           resources:
             requests:
               cpu: 250m
-              memory: 1Gi
+              # One resident ONNX session on the real 293 MiB OWLv2 artifact peaked
+              # at 3432 MiB RSS when measured in-cluster (scripts/smoke_inference.py).
+              # A 4Gi limit left ~600 MiB of headroom and the container was OOMKilled
+              # (exit 137) as soon as anything else loaded a second session. 6Gi is
+              # the smallest limit with room for arena growth and a decode spike.
+              memory: 2Gi
             limits:
               cpu: "2"
-              memory: 4Gi
+              memory: 6Gi

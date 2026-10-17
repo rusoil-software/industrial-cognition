@@ -1,0 +1,73 @@
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+#
+# One-shot probe that measures what a single CPU ONNX Runtime session on the real
+# OWLv2 artifact actually costs, in the worker's own image, with the model mounted
+# from the PVC.
+#
+# It exists because the vision Deployment was OOMKilled (exit 137) while a *second*
+# session was loaded alongside the worker's own, and it is not obvious from the
+# outside whether 4 GiB is enough for one session or was only exceeded because two
+# were resident. Capacity planning needs the number, not a guess.
+#
+#   kubectl apply -f k8s/tools/inference-probe.yaml
+#   kubectl -n cogni-ns cp scripts/smoke_inference.py inference-probe:/tmp/probe.py
+#   kubectl -n cogni-ns exec inference-probe -- env PYTHONPATH=/app python /tmp/probe.py
+#   kubectl -n cogni-ns delete pod inference-probe
+#
+# Deliberately given 8 GiB so the measurement is not truncated by the limit it is
+# meant to inform.
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: inference-probe
+  namespace: cogni-ns
+  labels:
+    app.kubernetes.io/name: industrial-cognition
+    app.kubernetes.io/component: inference-probe
+spec:
+  restartPolicy: Never
+  containers:
+    - name: probe
+      image: industrial-cognition/vision:dev
+      imagePullPolicy: IfNotPresent
+      command: ["sleep", "1800"]
+      env:
+        - name: OWL2_MODEL_PATH
+          value: /app/models/owl2_model.onnx
+        - name: OWL2_TEXT_IDS_PATH
+          value: /app/models/text_queries.json
+        - name: OWL2_EXECUTION_PROVIDER
+          value: CPUExecutionProvider
+        - name: VISION_BACKEND
+          value: owl2
+        - name: VISION_LABELS
+          value: metal_sheet
+      volumeMounts:
+        - name: model-cache
+          mountPath: /app/models
+          readOnly: true
+      resources:
+        requests:
+          cpu: "1"
+          memory: 2Gi
+        limits:
+          cpu: "6"
+          memory: 8Gi
+  volumes:
+    - name: model-cache
+      persistentVolumeClaim:
+        claimName: industrial-cognition-model-cache

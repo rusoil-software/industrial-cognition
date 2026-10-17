@@ -493,14 +493,23 @@ def build_backend(
                 / "owl2_model.onnx"
             ),
         )
+        # Load the tokenised prompt from OWL2_TEXT_IDS_PATH when the caller did not
+        # supply one. Omitting this made the deployed backend unconstructible: it
+        # passed text_query=None together with VISION_LABELS and tripped its own
+        # "labels= requires a text_query" check, so every real task failed. Unit
+        # tests always injected a TextQuery, which is exactly why it was invisible
+        # until the first live cluster run.
+        if text_query is None:
+            text_query = load_text_query()
+        extra_labels = tuple(
+            label.strip()
+            for label in os.getenv("VISION_LABELS", "").split(",")
+            if label.strip()
+        )
         return Owl2OnnxBackend(
             resolved_model,
             text_query=text_query,
-            labels=(
-                tuple(os.getenv("VISION_LABELS", "").split(","))
-                if os.getenv("VISION_LABELS")
-                else None
-            ),
+            labels=extra_labels or None,
         )
 
     raise ValueError(

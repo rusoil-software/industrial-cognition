@@ -327,3 +327,55 @@ because it could not serve `/health` without Modbus, a camera and a model.
 
 Operational knobs: `CAMERA_ENABLED`, `CAMERA_ID`, `CAMERA_SOURCE` (device index,
 V4L2 path or RTSP URL), `CAMERA_FPS`, `PIPELINE_MAX_IN_FLIGHT`.
+
+---
+
+## 13. Measured in a live cluster (CPU)
+
+The real artifact was loaded from the `model-cache` PVC into the `vision` worker on
+minikube and exercised with `scripts/smoke_inference.py`. No GPU is available, so
+these are CPU numbers - they are the *worst case* and the reason the 60 FPS target is
+a GPU claim (§1).
+
+| Quantity | Value | Notes |
+| --- | --- | --- |
+| Model load (`warmup`) | **11.4-11.8 s** | From the PVC, `CPUExecutionProvider` |
+| Inference, 2 CPU limit | **26.8 s/frame** | Through Celery, as deployed |
+| Inference, 6 CPU limit | **7.5-7.8 s/frame** | Probe pod; inference is CPU-bound and scales with cores |
+| Peak RSS, one session | **3432 MiB** | `VmHWM`, the 293 MiB artifact |
+| Logits | min -41.8, max -4.8, mean -17.5 | Finite, **not** the -65504 saturation case |
+| Best sigmoid score | **0.0084** | Below every usable threshold |
+
+### What this proves
+
+* The ONNX path works end to end in-cluster: artifact from a PVC, CPU session,
+  `pixel_values` in, `logits`/`pred_boxes` out, decode and NMS producing boxes.
+* The graph is **not** in the degenerate text state. Logits are finite and
+  well-distributed, so the earlier -65504 padding failure is not what is happening.
+* The geometry path is correct. With a bright rectangle drawn from
+  `(0.364, 0.312)` with size `(0.312, 0.312)` in normalised coordinates, the
+  highest-scoring decoded box was `(0.363, 0.310)` size `(0.317, 0.320)` - the same
+  rectangle. Box decoding and the centre-to-corner conversion are right.
+
+### What it does not prove
+
+Detection quality. The tokenised prompt on that PVC is a **placeholder**
+(`k8s/dev/text_queries.placeholder.json`), not a CLIP encoding of "metal sheet", so
+every score is near zero and nothing clears 0.25. That is the expected outcome of a
+meaningless prompt, not a defect in the pipeline. Producing real conditioning needs
+`scripts/encode_text_queries.py` with the CLIP tokenizer (§6).
+
+### Capacity findings
+
+* **Memory:** one resident session peaks at 3432 MiB. The dev overlay's 4 GiB limit
+  was exceeded and the container was OOMKilled (exit 137) as soon as a second
+  session was loaded in the same pod. Raised to 6 GiB. This also constrains
+  concurrency: Celery prefork children each load their **own** session, so
+  `--concurrency=1` is not a tuning preference but a memory requirement - N children
+  cost roughly N x 3.4 GiB.
+* **Latency:** ~7.5 s/frame at 6 cores. Reaching 60 FPS on CPU would need ~450
+  concurrent worker cores, which confirms §1's conclusion that this is GPU-only work.
+* **Warmup matters:** a ~11.5 s first-inference penalty per process means a cold
+  autoscale-up produces no detections for the first ~11 s. `VisionWorker.warmup()`
+  exists for this; the deployment should call it at startup rather than on the first
+  request.
