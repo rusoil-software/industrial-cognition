@@ -74,6 +74,108 @@ and ~20-40 ms expected on a GPU, so the 60 FPS aggregate target needs **2-3 GPU 
 on CPU: 244 workers). The pipeline itself is not the bottleneck; it sustains 60 FPS with adequate workers and
 sheds frames with bounded latency otherwise, both asserted by tests.
 
+### **Pre-Stage 3 backlog (agreed 2026-10-17)**
+
+Ordered roughly by what blocks what. Items 1-3 are the ones we named; the rest are gaps this
+build exposed that will cost more to fix later than now.
+
+**1. &#9744; Put the model back on the PVC (and fix the loader pod first).**
+Recreating the cluster recreated `industrial-cognition-model-cache` empty, so `vision` sits at
+`0/1` with nothing to load - the console previews and edits tasks, but detects nothing.
+`k8s/tools/model-loader.yaml` runs as root with no seccomp profile and trips the
+`restricted:latest` PodSecurity warning on every use. Before repopulating:
+add `runAsNonRoot`, `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`,
+`seccompProfile: RuntimeDefault` and an `fsGroup` that can write the volume, then
+`kubectl cp` the artifact, verify it with `scripts/inspect_model.py`, and confirm one real
+inference with `scripts/smoke_inference.py`.
+*Done when:* `vision` is `1/1` and a task returns detections from the real model.
+*Note:* a fresh cluster is also a fresh database - prompts live in Postgres, so a cluster
+recreate silently loses them. Re-set them after recreating (or seed them in the installer).
+
+**2. &#9744; Make the Celery worker lean enough for two.**
+One resident ORT session peaks at **3432 MiB** (measured, `doc/vision-pipeline.md` §13); the dev
+limit is 6 GiB and the node has 10. Two workers is therefore ~6.9 GiB for inference alone,
+leaving too little for Postgres, RabbitMQ, Redis, MinIO and the API.
+Investigate, in order: (a) ORT session options - `enable_cpu_mem_arena`,
+`arena_extend_strategy`, `enable_mem_pattern` - with RSS measured for each; (b) thread count
+per worker (intra-op is already cgroup-aware, but two workers sharing cores contend);
+(c) `worker_max_tasks_per_child` / `max_memory_per_child` so a long-lived child cannot creep;
+(d) image size (the worker image is 1.55 GB - trim what serving does not need);
+(e) a single inference service that the Celery workers call, so the model is resident once
+instead of per replica - the architectural answer if (a)-(d) are not enough.
+*Done when:* two workers plus the rest of the stack fit the node, with measured RSS and
+per-frame latency recorded in `doc/vision-pipeline.md`.
+
+**3. &#9744; Find the real camera from the OS and run it end to end.**
+Windows: `Get-PnpDevice -Class Camera` for the device, OpenCV `CAP_DSHOW` for the index.
+Linux: `/dev/video*` plus `v4l2-ctl --list-devices --list-formats-ext` to confirm MJPG at the
+target rate. **Containers cannot see a USB camera on Docker Desktop/WSL**, so the practical
+path is to run capture on the host and publish RTSP (ffmpeg or mediamtx), then point
+`CAMERA_SOURCE=rtsp://...` at it - the same code path production uses. `DeviceFrameSource`
+already negotiates MJPG, sets `CAP_PROP_BUFFERSIZE=1` and warns when the negotiated FPS is
+below 90% of the request; add a `scripts/probe_camera.py` that lists devices, formats and the
+achievable FPS so this is diagnosable rather than guesswork.
+*Done when:* real frames reach the console with overlays, at a documented resolution/FPS.
+
+**4. &#9744; Persist detections.**
+`detection_results` and its ORM exist, but nothing writes to them: results only go out over the
+WebSocket. Stage 3 history and analytics need a writer with a retention policy, and at 60 FPS a
+sampling rule (per class, per camera, or on change) rather than one row per frame.
+
+**5. &#9744; Make readiness honest.**
+`/health` returns 200 with `pipeline_running: false`, so Kubernetes reports the API ready while
+detection is degraded - the console can look "up" with a dead pipeline. Split liveness
+(`/health`) from readiness (`/readyz`, which fails when capture is expected but not running) and
+decide per deployment what "ready" means (the API pod serves the UI *and* captures in dev).
+
+**6. &#9744; Harden auth before anything faces a network.**
+Dev credentials are committed in `k8s/base/secrets.env`; `AUTH_TOKEN`/`JWT_SECRET` must be
+rotated, `AUTH_COOKIE_SECURE=1` behind TLS, token lifetime decided, and `/docs` +
+`/openapi.json` closed in production. Today it is one shared deployment token - per-user
+accounts and roles are a later step, but the shared token must not survive into a shared
+network.
+
+**7. &#9744; Real ingress and TLS.**
+The dev overlay installs no ingress controller (NodePort 30080 is dev-only) and the prod ingress
+references secret `industrial-cognition-tls` that nothing creates. Need cert-manager or a
+provided certificate, a real hostname, and probes that match item 5.
+
+**8. &#9744; Broker-side queue hygiene.**
+We observed a 41-message backlog and `queue_ms` of 353 s. The client sheds frames, but the broker
+does not: set `x-max-length` / message TTL on `vision` so stale frames die at the broker, and
+give `vision.dlq` a producer (it is declared and unused) plus a retry policy for
+genuinely-failed tasks.
+
+**9. &#9744; Decide multi-camera shape.**
+The runner is one source per process; per-camera prompts already exist but queues, task routing
+and stats assume a single capture loop per deployment. Either run one capture Deployment per
+camera (simplest, needs per-camera services/ingress paths) or teach the runner multiple sources
+with per-camera windows and stats. Also per-camera `PIPELINE_MAX_IN_FLIGHT`, which must be sized
+from inference latency, not left at a default.
+
+**10. &#9744; Make the deployment itself testable in CI.**
+`tests/k8s` checks manifests, but nothing exercises auth, the stream endpoints or the WebSocket
+outside a manual `scripts/smoke_*.py` run. Promote `smoke_auth.py` and `smoke_ui.py` into a
+pytest-marked integration suite against kind/minikube, so the six-to-eight bugs each live run
+found would be caught automatically.
+
+**11. &#9744; Detection quality beyond one photograph.**
+One Apache-2.0 image proves prompt conditioning; thresholds are still chosen from a handful of
+scores (`doc/vision-pipeline.md` §14). Build a small ground-truth set of the real workcell per
+camera and tune per-query thresholds against it, and use
+`POSE-Lab/IndustryShapes` (already noted in `assets/images/README.md`) for a broader evaluation
+before Stage 3 claims quality numbers.
+
+**12. &#9744; Decide where the GPU sits.**
+The prod overlay requests `nvidia.com/gpu` and the worker image installs `onnxruntime-gpu`, but
+nothing has ever run on a GPU: every measurement is CPU at ~11 s/frame. Before performance work
+in Stage 3, confirm a GPU runtime actually exists (`CUDAExecutionProvider` visible in the pod)
+or state plainly that 60 FPS is out of scope for now.
+
+**13. &#9744; Model delivery stays manual, by agreement.**
+The artifact lives on a PVC and is copied by hand. Revisit together with the MinIO replacement
+(Stage 4) so the worker pulls it at startup with checksum verification instead of `kubectl cp`.
+
 ### **Stage 3: Polish & Hardening**
 
 * ✅ Operator console: Vue 3 single-page UI (ui/, no build step) served at /ui/ with a
