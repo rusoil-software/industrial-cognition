@@ -2,7 +2,7 @@
 
 | File | Source | Licence | Used by |
 | --- | --- | --- | --- |
-| `roboflow_test_detect_human_robot.webp` | Roboflow test dataset (human + robot detection) | Apache 2.0 | `tests/vision/test_detection_quality.py` |
+| `roboflow_test_detect_human_robot.webp` | Roboflow test dataset (human + robot detection) [robo-environment-n6d0b](https://universe.roboflow.com/tamilvanan-jj11e/robo-environment-n6d0b) | Apache 2.0 | `tests/vision/test_detection_quality.py` |
 
 The image is an overhead warehouse scene chosen because its two subjects are
 **geometrically separable**: a yellow articulated robot arm at the top centre and a
