@@ -45,6 +45,20 @@ data:
   MODEL_PATH: "/app/models/owl2_model.onnx"
   MIN_CONFIDENCE_THRESHOLD: "0.75"
   SCALE_FACTOR_MM_PER_UNIT: "3000.0"
+  # Tokenised detection prompt, produced once by scripts/encode_text_queries.py.
+  # Required: the artifact was exported with random dummy tokens, and feeding
+  # padding tokens saturates its fp16 text path (-65504) so nothing is ever
+  # detected. See doc/vision-pipeline.md §6.
+  OWL2_TEXT_IDS_PATH: "/app/models/text_queries.json"
+  # --- vision pipeline (doc/vision-pipeline.md §8) --------------------------
+  # `owl2` in production; `synthetic` fabricates detections and is for load tests.
+  VISION_BACKEND: "owl2"
+  # OWLv2 zero-shot sigmoid scores are typically 0.1-0.4, so the legacy 0.75 above
+  # would report nothing found.
+  VISION_SCORE_THRESHOLD: "0.25"
+  VISION_IOU_THRESHOLD: "0.5"
+  VISION_MAX_DETECTIONS: "32"
+  VISION_LABELS: "metal_sheet"
 
   # ------------------------------------------------------------- async pipeline
   # Consumed by src/tasks/celery.py.

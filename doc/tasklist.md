@@ -37,10 +37,29 @@ This list tracks all development tasks required to bring the system from bluepri
 
 ### **Stage 2: Core Functionality Implementation**
 
-* 🟡 Camera Service: Implement low-level RTSP capture, using OpenCV, and streaming results via WebSocket.
-* 🟡 Vision Service: Implement the core detection logic using OWLv2 on ONNX Runtime.
-* 🟡 Robot Interface: Implement the Modbus/RS-485 communication service that consumes detection data and sends commands.
-* 🟡 Orchestration: Develop the FastAPI layer to tie together the services (Routing/Error Handling).
+* 🟡 Camera Service: Device/RTSP capture implemented in `src/camera/capture.py` (MJPG + 60 FPS negotiation,
+  `CAP_PROP_BUFFERSIZE=1` to avoid draining stale frames, JPEG encode at the model's resolution) and unit
+  tested. **Remaining:** push results to clients over the FastAPI WebSocket (`/ws/detections`); the payload
+  already matches `src/camera/schemas.py::StreamingPayload`. Real device negotiation needs the camera hardware.
+* ✅ Vision Service: OWLv2 on ONNX Runtime is implemented end to end and unit tested — preprocessing
+  (`src/vision/preprocess.py`), graph decoding (`src/vision/decode.py`: centre→corner, sigmoid, NMS, fp16),
+  backend seam (`src/vision/backend.py`) and the per-frame worker (`src/vision/worker.py`). The model contract
+  was read from the artifact with `scripts/inspect_model.py`. 72 tests in `tests/vision`.
+  *Caveat:* real detections additionally need a tokenised prompt
+  (`scripts/encode_text_queries.py` → `OWL2_TEXT_IDS_PATH`), because the artifact was exported with random
+  dummy tokens; see `doc/vision-pipeline.md` §6.
+* 🟡 Robot Interface: Not started in this pass. The Modbus service and command manager remain the stubs from
+  `src/robot/`; the pipeline produces `Detection` objects ready for it.
+* 🟡 Orchestration: Multi-worker dispatch implemented and load tested — bounded in-flight window with
+  load shedding, capture/dispatch/completion FPS and latency percentiles (`src/pipeline/`), Celery task and
+  transport, and the 60 FPS acceptance tests (`tests/pipeline`, 28 tests). **Remaining:** wire the dispatcher
+  into the FastAPI app; replace the stub bootstrap in `src/api/main.py`, which currently initialises camera,
+  vision and Modbus in-process.
+
+**Stage 2 throughput note (measured, `doc/vision-pipeline.md` §1):** one OWLv2 pass costs **4053 ms on CPU**
+and ~20-40 ms expected on a GPU, so the 60 FPS aggregate target needs **2-3 GPU workers** (or is unreachable
+on CPU: 244 workers). The pipeline itself is not the bottleneck; it sustains 60 FPS with adequate workers and
+sheds frames with bounded latency otherwise, both asserted by tests.
 
 ### **Stage 3: Polish & Hardening**
 
