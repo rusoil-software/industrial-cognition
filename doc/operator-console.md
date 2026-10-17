@@ -57,8 +57,13 @@ serves the whole console; either point the ingress at it, or co-locate capture w
 API. Both pods share the database, so a task set from either applies to both.
 
 ```sh
-kubectl -n cogni-ns port-forward deploy/camera 8080:8000
-# then open http://localhost:8080/ui/
+# one command: builds, deploys, migrates, prints the tokenised URL and opens it
+./console.cmd            # Windows
+./install.sh             # POSIX
+
+# or just the console, against something already deployed
+./console.cmd            # == scripts/console.ps1 (port-forwards svc/api, never a pod)
+./scripts/console.sh     # POSIX
 ```
 
 ## What the live run fixed

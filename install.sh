@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Copyright (c), The Rusoil Software Development Team. All rights reserved.
 #
@@ -15,113 +15,84 @@
 # limitations under the License.
 #
 # author : Konstantin Ustiuzhanin
-# date   : 2026-Jun-31
+# date   : 2026-Oct-17
 # ==============================================================================
-
-
-# --- Industrial Cognition System Installer Script (V6.0 - Full Startup) ---
-# This script builds all necessary service images and brings up the entire stack 
-# for full local development parity.
-
-set -e # Exit immediately if a command exits with a non-zero status.
-
-echo "====================================================================================="
-echo "       Starting Industrial Cognition System Deployment (Full Stack)             "
-echo "====================================================================================="
-
-WORK_DIR=$(pwd)
-
-echo "-- Checking for core dependencies (Docker/Docker-Compose)... --"
-if docker compose version &> /dev/null; then
-    COMPOSE_CMD="docker compose"
-elif command -v docker-compose &> /dev/null; then
-    COMPOSE_CMD="docker-compose"
-else
-    echo "Error: Neither 'docker compose' nor 'docker-compose' found."
-    echo "ERROR: Docker Compose is not installed or not in PATH. Please install Docker Compose."
-    echo "Visit https://docs.docker.com/compose/install/ for installation instructions."
-    echo "Exiting setup."
-    echo "=============================================================================="
-    echo "SETUP FAILED: Missing Dependency"
-    echo "Please install Docker Compose and re-run this script."
-    echo "=============================================================================="
-    echo "Press any key to exit..."
-    read 1
-    exit 1
-fi
-
-echo "-- Docker Compose found. Proceeding... ---"
-echo "--- Building all necessary service images... ---"
-# Build the API Gateway and the Vision Worker first.
-echo "--- Building API Gateway... ---"
-$COMPOSE_CMD build api
-echo "-------------------------------------------------------------------------------------"
-# Build the worker service using the Dockerfile placed in src/vision/
-echo "--- Building Vision Worker... ---"
-$COMPOSE_CMD build vision
-echo "-------------------------------------------------------------------------------------"
-
-if [ $? -ne 0 ]; then
-    echo "============================================================================="
-    echo "BUILD FAILED: Check error messages above. One or more services failed to build."
-    echo "The build failure usually points to missing dependencies in the Dockerfile or external system issues."
-    echo "=============================================================================="
-    exit 1
-fi
-
-echo "====================================================================================="
-echo "BUILD COMPLETE."
-echo "The following services are now ready to run:"
-echo "  - api (HTTP/WebSocket)"
-echo "  - vision (Message Consumer)"
-echo "====================================================================================="
-echo ""
-
-echo "--- STARTING CORE SERVICES (Requires Infrastructure to be online) ---"
-echo "NOTE: This assumes RabbitMQ, Redis, and MinIO are accessible and running externally."
-echo "If these are not running, the startup will fail gracefully with connection errors."
-echo "-------------------------------------------------------------------------------------"
-
-# Attempt to start the application stack.
-$COMPOSE_CMD up -d api vision
-
-if [ $? -ne 0 ]; then
-    echo "====================================================================================="
-    echo "WARNING: Startup failed for API Gateway or Worker."
-    echo "Action: Check if the external infrastructure (Redis, RabbitMQ, MinIO) is running."
-    echo "====================================================================================="
-else
-    echo "====================================================================================="
-    echo "SUCCESS: Core services (API Gateway & Vision Worker) are running in the background."
-    echo "====================================================================================="
-fi
-
-# ==============================================================================
-# KUBERNETES PATH
-# ==============================================================================
-# The compose stack above is the local-development path. The production path is
-# the Kustomize overlay set in k8s/ (see doc/k8s.md). Run it with:
 #
-#   ./k8s/scripts/deploy.sh --overlay dev      # single-node / local cluster
-#   ./k8s/scripts/deploy.sh --overlay prod     # full topology + monitoring
+# Install Industrial Cognition on a local Kubernetes cluster, then open the console.
 #
-# Validate the manifests without a cluster at any time:
+#   1. preflight - docker, minikube, kubectl
+#   2. cluster   - start minikube if needed and refresh the kubeconfig
+#   3. images    - build both images and load them into the node
+#   4. deploy    - kubectl apply -k, wait for rollouts, run migrations as a Job
+#   5. console   - print the tokenised URL and open the browser
 #
-#   ./k8s/scripts/validate.sh
-# ==============================================================================
+# Deliberately no `kubectl exec` and no port-forward to a Deployment: a Pending pod cannot
+# be exec'd into ("does not have a host assigned"), while a Job and a Service port-forward
+# both work regardless of which replica is up.
+#
+# Windows: use install.cmd, which calls install.ps1. A fresh Windows install refuses to
+# run unsigned .ps1 files, and the .cmd wrapper passes -ExecutionPolicy Bypass for that
+# invocation only.
+#
+# Usage:
+#   ./install.sh [--memory 10240] [--cpus 8] [--overlay dev] [--no-console]
 
-if command -v kubectl &> /dev/null; then
-    echo
-    echo "-------------------------------------------------------------------------------------"
-    echo "kubectl detected. The Kubernetes deployment path is available:"
-    echo "    ./k8s/scripts/deploy.sh --overlay dev"
-    echo "Documentation: doc/k8s.md"
-    echo "-------------------------------------------------------------------------------------"
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MEMORY=10240
+CPUS=8
+OVERLAY=dev
+OPEN_CONSOLE=1
+
+usage() { sed -n '30,45p' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -m|--memory)    MEMORY="${2:?}"; shift 2 ;;
+        -c|--cpus)      CPUS="${2:?}"; shift 2 ;;
+        -o|--overlay)   OVERLAY="${2:?}"; shift 2 ;;
+        --no-console)   OPEN_CONSOLE=0; shift ;;
+        -h|--help)      usage ;;
+        *) echo "unknown argument: $1 (try --help)" >&2; exit 2 ;;
+    esac
+done
+
+step() { printf '\n\033[36m==> %s\033[0m\n' "$*"; }
+die()  { printf '\033[31merror: %s\033[0m\n' "$1" >&2; [[ -n "${2:-}" ]] && printf '%s\n' "$2" >&2; exit 1; }
+
+cd "${REPO_ROOT}"
+
+step "preflight"
+for tool in docker minikube kubectl; do
+    command -v "${tool}" >/dev/null 2>&1 || die "${tool} is not installed or not on PATH"
+done
+docker version --format '{{.Server.Version}}' >/dev/null 2>&1 \
+    || die "the Docker engine is not responding. Start Docker Desktop and re-run."
+printf '    docker %s\n' "$(docker version --format '{{.Server.Version}}')"
+
+step "cluster (minikube, ${MEMORY} MB, ${CPUS} CPUs)"
+if [[ "$(minikube status --format '{{.Host}}' 2>/dev/null || true)" != "Running" ]]; then
+    minikube start --driver=docker --memory="${MEMORY}" --cpus="${CPUS}"
 else
-    echo
-    echo "-------------------------------------------------------------------------------------"
-    echo "kubectl not found. Only the Docker Compose stack was started."
-    echo "For the Kubernetes deployment described in doc/k8s.md, install kubectl and run:"
-    echo "    ./k8s/scripts/deploy.sh --overlay dev"
-    echo "-------------------------------------------------------------------------------------"
+    printf '    already running\n'
 fi
+# After a Docker Desktop restart the API server port changes and the kubeconfig keeps
+# pointing at the old one, which presents as "the cluster is down".
+minikube update-context >/dev/null
+kubectl get --raw /healthz --request-timeout=15s >/dev/null 2>&1 \
+    || die "the Kubernetes API server is not answering." \
+           "  Recreate the cluster: minikube delete && ./install.sh"
+
+step "building and loading images"
+"${REPO_ROOT}/k8s/scripts/build-images.sh" --tag dev --load-minikube
+
+step "applying k8s/overlays/${OVERLAY}, waiting for rollouts, migrating"
+"${REPO_ROOT}/k8s/scripts/deploy.sh" --overlay "${OVERLAY}" --image-tag dev --migrate
+
+if [[ "${OPEN_CONSOLE}" -eq 0 ]]; then
+    printf '\n  Done. Start the console with: ./scripts/console.sh\n'
+    exit 0
+fi
+
+exec "${REPO_ROOT}/scripts/console.sh"
