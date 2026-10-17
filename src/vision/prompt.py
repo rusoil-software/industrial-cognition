@@ -295,7 +295,11 @@ def encode_prompt(
     text = build_prompt_text(labels)
     try:
         input_ids, attention_mask = tokenizer.encode(text)
-    except PromptEncodingError:
+    except (PromptEncodingError, TokenizerUnavailable):
+        # TokenizerUnavailable must NOT be wrapped: it means the deployment lacks a
+        # tokenizer, which the API maps to 503. Wrapping it made the 503 branch
+        # unreachable and reported a missing package as if the user's prompt were
+        # invalid - found by the live cluster smoke test.
         raise
     except Exception as exc:  # noqa: BLE001 - tokenizer backends vary
         raise PromptEncodingError(f"tokenisation failed: {exc}") from exc

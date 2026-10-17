@@ -54,7 +54,7 @@ psycopg[binary]==3.2.9
 # --- Robot interface --------------------------------------------------------
 # Modbus/RS-485 over pyserial; the single source of truth for physical control
 # (doc/conventions.md §3).
-serial==0.0.97
+pyserial==3.5
 
 # --- Vision and camera ------------------------------------------------------
 opencv-contrib-python==4.11.0.86

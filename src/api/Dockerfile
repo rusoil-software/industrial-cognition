@@ -33,6 +33,16 @@ RUN pip install --no-cache-dir -r requirements/api.txt
 # Copy the entire source code structure
 COPY src/ ./src/
 
+# Alembic configuration and revisions.
+#
+# Required in the image, not only on a developer's machine: the deployment runs
+# migrations as a Job from this same image (k8s/scripts/deploy.sh --migrate), so an
+# image without these files makes `alembic upgrade head` fail with "No such file:
+# alembic.ini" and leaves the schema uncreated. The API does not import Alembic at
+# runtime; this exists purely so the migration path is deployable.
+COPY alembic.ini ./alembic.ini
+COPY alembic/ ./alembic/
+
 # Expose the port used by FastAPI
 EXPOSE 8000
 

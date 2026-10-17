@@ -510,3 +510,77 @@ minimal pure-Python renderer) and asserts the invariants that were violated by t
   non-root `securityContext`;
 * `robot` is a singleton with `Recreate`, and `postgres`/`rabbitmq`/`redis`/`minio` are StatefulSets with
   `volumeClaimTemplates` (the regression guards for this specific rewrite).
+
+---
+
+## Live run: minikube (2026-10-17)
+
+First full deployment of Stages 1-2 to a real cluster. Cluster: minikube v1.39.0,
+driver `docker`, Kubernetes v1.37.0, 8 vCPU / 10 GiB, containerd runtime.
+`kubectl apply -k k8s/overlays/dev` created 35 objects; all pods reached `Running`
+(api x2, camera, robot, vision, postgres, rabbitmq, redis, minio) and the
+`minio-bucket-init` Job completed.
+
+**Verified working**
+
+* `/health` returns 200 with `pipeline_running: false` and
+  `reason: capture source could not be opened`. The deliberate non-fatal startup is
+  what makes this possible: the container has no `/dev/video0`, and the API still
+  serves. The previous bootstrap raised here, which is why the pod used to
+  CrashLoopBackOff.
+* Service discovery from inside a pod: `postgres:5432`, `rabbitmq:5672`,
+  `redis:6379`, `minio:9000` all reachable, and the DSN/broker URLs from the
+  generated Secrets resolve.
+* Alembic created `detection_results`, `system_metadata` and `alembic_version`.
+* The prompt repository round trip against real Postgres: store, load, list, upsert
+  (one row, not two) and delete, via `scripts/smoke_cluster.py`.
+* HTTP error mapping: 422 for an invalid prompt, 503 when the image has no
+  tokenizer, 404 when unset.
+* `WS /ws/detections` answers `{"type":"unavailable"}` and closes when capture is
+  not running.
+* End-to-end task path: a JPEG produced in an api pod was sent through RabbitMQ,
+  analysed by the `vision` worker (synthetic backend) and the result returned
+  through Redis - 2 detections, 0.30 s round trip, `preprocess_ms` 18.0,
+  `inference_ms` 0.96.
+
+**Bugs this run found (all fixed)**
+
+1. `alembic.ini` and `alembic/` were not copied into the API image, so the migration
+   Job from `deploy.sh --migrate` could never have run. The image built fine and the
+   failure only appeared on the first `alembic upgrade head`.
+2. `requirements/*.txt` pinned `serial==0.0.97`, which is an unrelated PyPI package,
+   not pyserial; `import serial; serial.Serial` would fail at runtime. Now
+   `pyserial==3.5`.
+3. The API image lacked OpenCV, Celery and Redis, yet `deployment-camera` and
+   `deployment-robot` reuse it - so capture and enqueueing could not work at all.
+4. `build-images.sh` re-tagged the API image as the vision image ("identical
+   content"). They are not identical, and the re-tag yields a worker with no
+   `celery` binary. It now builds `src/vision/Dockerfile.worker`.
+5. `requirements/vision.txt` installed the *export* stack
+   (`optimum-onnx`, `onnxscript`), pulling PyTorch into a serving image; the build
+   never finished. Serving needs only `onnxruntime-gpu`, and export moves to
+   `requirements/export.txt`.
+6. `encode_prompt` wrapped `TokenizerUnavailable` in `PromptEncodingError`, so a
+   deployment without a tokenizer answered 422 ("your prompt is invalid") instead of
+   503. Now the two are distinguished, with a regression test.
+
+**Operational notes for Windows workstations**
+
+* `minikube docker-env` does not work with the containerd runtime on Windows
+  (`SSH_AGENT_START: starting an SSH agent on Windows is not yet supported`). Build
+  with the default Docker daemon and load the image with
+  `minikube image load <ref>`; `build-images.sh --load-minikube` already does this.
+* The dev overlay leaves the nginx ingress controller uninstalled, so
+  `mvm.example.com` is not reachable until `minikube addons enable ingress`.
+  Reach the API with `kubectl -n cogni-ns port-forward svc/api 8000:80` or from
+  inside a pod.
+* Migrations are not automatic: run
+  `kubectl -n cogni-ns exec deploy/api -- alembic upgrade head` (or
+  `deploy.sh --migrate`).
+
+**Not exercised**
+
+The real OWLv2 model (the `model-cache` PVC is empty and there is no GPU in the
+cluster), real camera capture, and the Modbus transports. The `vision` worker ran
+with `VISION_BACKEND=synthetic` for the task smoke test and was returned to the
+`owl2` default afterwards.

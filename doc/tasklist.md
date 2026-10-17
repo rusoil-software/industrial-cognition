@@ -72,6 +72,11 @@ sheds frames with bounded latency otherwise, both asserted by tests.
 ### **Stage 3: Polish & Hardening**
 
 * 🟡 End-to-End Testing: Write and execute full integration tests covering the entire pipeline (Camera -> Vision -> Modbus).
+  **Live deployment done (2026-10-17):** the whole stack runs on minikube — all pods `Running`, schema migrated,
+  service discovery, prompt repository against real Postgres, and the full
+  API → RabbitMQ → vision worker → Redis task path verified with a real JPEG (0.30 s, 2 detections).
+  Six deployment bugs were found and fixed; see `doc/k8s.md` "Live run". Remaining: real camera/OWLv2/Modbus
+  hardware, and automated assertions rather than a smoke script.
 * 🟡 Observability Integration: Hook up Prometheus metrics scraping endpoints to all service checkpoints.
   The Kubernetes side is already in place (`k8s/components/monitoring` scrapes the
   `prometheus.io/scrape` annotations on every Deployment); what remains is the `/metrics` endpoint itself in

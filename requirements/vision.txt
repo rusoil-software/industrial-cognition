@@ -1,8 +1,21 @@
-opencv-contrib-python==4.11.0.86
-onnxruntime==1.24.4
-onnxscript>=0.7.1.dev20260422
+# Vision worker (serving) requirements.
+#
+# Serving only. This file previously included the *export* stack
+# (`optimum-onnx[onnxruntime-gpu]`, `onnxscript`), which pulls PyTorch and turns the
+# worker image into a multi-gigabyte download for dependencies the worker never
+# executes. Exporting the ONNX artifact happens once, offline, with
+# `requirements/export.txt`. The cost was visible in a live minikube run, where the
+# worker image build dominated the entire deployment and never finished.
+#
+# onnxruntime-gpu is the only ONNX Runtime here. Installing `onnxruntime` and
+# `onnxruntime-gpu` in the same environment makes the two wheels overwrite each
+# other's `onnxruntime` package, so whichever pip installs last silently decides
+# whether CUDA is available at all.
+opencv-contrib-python-headless==4.11.0.86
 onnxruntime-gpu==1.24.4
-optimum-onnx[onnxruntime-gpu]==0.1.0
 celery==5.6.3
-serial==0.0.97
 redis==7.2
+numpy<2.0.0
+# pyserial, not the unrelated `serial` package on PyPI (which does not provide
+# serial.Serial). See doc/robot-interface.md.
+pyserial==3.5

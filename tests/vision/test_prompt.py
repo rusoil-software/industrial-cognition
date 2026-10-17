@@ -29,6 +29,7 @@ from src.vision.prompt import (
     TransformersPromptTokenizer,
     build_prompt_text,
     encode_prompt,
+    TokenizerUnavailable,
     get_tokenizer,
 )
 
@@ -164,3 +165,23 @@ def test_transformers_tokenizer_fails_loudly_when_unavailable() -> None:
         assert "transformers" in str(exc) or "not available" in str(exc)
     else:
         pytest.skip("transformers is installed with a usable offline cache")
+
+
+def test_tokenizer_unavailable_is_not_reported_as_a_prompt_error() -> None:
+    """A missing tokenizer is a deployment problem (503), not a bad prompt (422).
+
+    Found in the live cluster: encode_prompt wrapped every tokenizer exception in
+    PromptEncodingError, so the API answered 422 "tokenisation failed: ..." and the
+    503 branch was unreachable. An operator would have chased the prompt instead of
+    the image.
+    """
+
+    class Unavailable:
+        name = "unavailable"
+        max_length = 16
+
+        def encode(self, text: str):
+            raise TokenizerUnavailable("the prompt tokenizer requires 	ransformers")
+
+    with pytest.raises(TokenizerUnavailable):
+        encode_prompt(["metal sheet"], Unavailable())

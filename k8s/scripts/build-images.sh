@@ -90,15 +90,31 @@ docker build \
   --label "org.opencontainers.image.revision=$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || echo unknown)" \
   "${REPO_ROOT}"
 
-# A re-tag, not a rebuild: identical content, so the node stores one layer set.
-log "Tagging ${vision_ref}"
-docker tag "${api_ref}" "${vision_ref}"
+# The two images are genuinely different and must be built separately.
+#
+# This used to be `docker tag "${api_ref}" "${vision_ref}"` - correct only while
+# both images installed the same requirements. They no longer do: the worker needs
+# celery, redis and ONNX Runtime (requirements/vision.txt), while the API/camera/
+# robot image needs FastAPI, SQLAlchemy and OpenCV but no inference stack
+# (requirements/api.txt). Re-tagging the API image produced a "vision" image whose
+# worker died with `exec: "celery": executable file not found in $PATH`.
+log "Building ${vision_ref} from src/vision/Dockerfile.worker"
+docker build \
+  --file "${REPO_ROOT}/src/vision/Dockerfile.worker" \
+  --tag "${vision_ref}" \
+  --label "org.opencontainers.image.revision=$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || echo unknown)" \
+  "${REPO_ROOT}"
 
 log "Verifying the worker entrypoint imports"
-if docker run --rm --entrypoint python "${api_ref}" -c "import src.tasks.celery" >/dev/null 2>&1; then
+if docker run --rm --entrypoint python "${vision_ref}" -c "import src.tasks.celery" >/dev/null 2>&1; then
   log "  src.tasks.celery imports cleanly"
 else
   warn "src.tasks.celery failed to import; the vision worker will CrashLoopBackOff"
+fi
+
+if command -v docker >/dev/null 2>&1; then
+  docker run --rm --entrypoint sh "${vision_ref}" -c 'command -v celery >/dev/null' 2>/dev/null \
+    || warn "the celery binary is missing from ${vision_ref}"
 fi
 
 if [[ "${PUSH}" -eq 1 ]]; then
