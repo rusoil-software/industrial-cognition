@@ -161,7 +161,29 @@ class VisionWorker:
                 "error": f"malformed payload: {exc}",
                 "timings": {},
             }
-        return self.process_frame(frame).to_wire()
+
+        # The dispatcher embeds the camera's prompt in the payload so workers stay
+        # stateless. Reading it here is what makes a stored prompt actually affect
+        # inference: without this, the prompt is persisted, sent, and ignored.
+        prompt = self._prompt_from_payload(payload)
+        return self.process_frame(frame, prompt=prompt).to_wire()
+
+    def _prompt_from_payload(self, payload: dict[str, Any]) -> Optional[CameraPrompt]:
+        """Decode the per-camera prompt carried by the payload, if any.
+
+        A malformed prompt falls back to the backend's configured default rather
+        than failing the frame: detection at the default prompt is more useful than
+        no detection, and the warning names the problem.
+        """
+        raw = payload.get("prompt")
+        if not raw:
+            return None
+        try:
+            return CameraPrompt.from_dict(raw)
+        except (PromptEncodingError, AttributeError, TypeError) as exc:
+            logger.warning("ignoring unusable prompt in payload: %s", exc)
+            return None
+
 
     def process_frame(
         self,

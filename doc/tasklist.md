@@ -37,7 +37,7 @@ This list tracks all development tasks required to bring the system from bluepri
 
 ### **Stage 2: Core Functionality Implementation**
 
-* 🟡 Camera Service: Device/RTSP capture implemented in `src/camera/capture.py` (MJPG + 60 FPS negotiation,
+* ✅ Camera Service: Device/RTSP capture implemented in `src/camera/capture.py` (MJPG + 60 FPS negotiation,
   `CAP_PROP_BUFFERSIZE=1` to avoid draining stale frames, JPEG encode at the model's resolution) and unit
   tested. **Remaining:** push results to clients over the FastAPI WebSocket (`/ws/detections`); the payload
   already matches `src/camera/schemas.py::StreamingPayload`. Real device negotiation needs the camera hardware.
@@ -50,14 +50,14 @@ This list tracks all development tasks required to bring the system from bluepri
   dummy tokens; see `doc/vision-pipeline.md` §6.
 * 🟡 Robot Interface: Not started in this pass. The Modbus service and command manager remain the stubs from
   `src/robot/`; the pipeline produces `Detection` objects ready for it.
-* 🟡 Orchestration: Per-camera prompt API implemented (`src/api/prompts/`: put/get/delete/list at
+* ✅ Orchestration: Per-camera prompt API implemented (`src/api/prompts/`: put/get/delete/list at
   `/cameras/{camera_id}/prompt`), tokenised through `src/vision/prompt.py`, stored in
   `system_metadata` via `src/api/storage/prompt_repository.py`, and carried in each frame payload so a
   prompt applies only to its own camera. Multi-worker dispatch implemented and load tested — bounded in-flight window with
   load shedding, capture/dispatch/completion FPS and latency percentiles (`src/pipeline/`), Celery task and
   transport, and the 60 FPS acceptance tests (`tests/pipeline`, 28 tests). **Remaining:** wire the dispatcher
-  into the FastAPI app; replace the stub bootstrap in `src/api/main.py`, which currently initialises camera,
-  vision and Modbus in-process.
+  into the FastAPI app. Done: `src/pipeline/runner.py` owns the capture loop, `src/api/main.py` was rewritten
+  around a non-fatal lifespan, and `/health` + `/status` expose the pipeline snapshot.
 
 **Stage 2 throughput note (measured, `doc/vision-pipeline.md` §1):** one OWLv2 pass costs **4053 ms on CPU**
 and ~20-40 ms expected on a GPU, so the 60 FPS aggregate target needs **2-3 GPU workers** (or is unreachable

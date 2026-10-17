@@ -15,126 +15,86 @@
 # author : Konstantin Ustiuzhanin
 # date   : 2026-Apr-23
 # ==============================================================================
+"""FastAPI application entry point.
 
-# Main Application Entry Point (FastAPI App)
-# This file orchestrates the Camera, Vision, and Robot modules.
+Surface (matching `doc/vision.md` "Presentation/API Layer"):
 
-import time
-import datetime 
-from typing import Optional
-import asyncio
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from src.camera.service import CameraService
-from src.vision.service import VisionService, DetectionTaskPayload
-from src.robot.service import ModbusService
-from src.robot.integration_manager import RobotCommandManager
-from src.camera.schemas import CameraConfig, StreamingPayload
-from src.camera.schemas import DetectionResult, FrameMetadata
-from src.camera.constants import DEFAULT_FPS
+* ``GET  /health``  - liveness/readiness, plus whether the detection pipeline runs.
+  ``status: ok`` is preserved so the Kubernetes probes keep working.
+* ``GET  /status``  - pipeline, throughput and fan-out snapshot.
+* ``WS   /ws/detections`` - real-time detection stream.
+* ``PUT/GET/DELETE /cameras/{camera_id}/prompt`` - per-camera detection prompts.
 
+Startup policy changed deliberately. The previous bootstrap called Modbus, the
+camera and the model from the startup handler and raised when any was missing, so
+the API pod crash-looped in the cluster: the process could not serve ``/health``
+without physical hardware attached. A service that owns an HTTP surface must serve
+it and report the pipeline as degraded, which is what
+:func:`src.api.runtime.start_pipeline` now does - it never raises, and the reason a
+pipeline is down is visible in ``/health``.
+"""
+
+from __future__ import annotations
+
+import logging
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+
+from src.api import runtime
 from src.api.prompts.router import router as prompts_router
+from src.api.realtime import router as realtime_router
 
-app = FastAPI(title="Industrial Cognition Core API")
-
-# Per-camera detection prompts, set by the System User
-# (PUT/GET/DELETE /cameras/{camera_id}/prompt). See doc/vision-pipeline.md §11.
-app.include_router(prompts_router)
-
-# --- Global State ---
-# State management for all initialized services
-camera_service: Optional[CameraService] = None
-vision_service: Optional[VisionService] = None
-modbus_service: Optional[ModbusService] = None
-robot_manager: Optional[RobotCommandManager] = None
-
-async def setup_services(config: CameraConfig):
-    """Initializes all core components upon application startup."""
-    global camera_service, vision_service, modbus_service, robot_manager
-    
-    # 1. Initialize Modbus Service
-    modbus_service = ModbusService(port=f"{config.camera_id}_rs485", baudrate="9600")
-    if not modbus_service.connect():
-        raise ConnectionError("Failed to connect to Modbus Controller. Cannot start system.")
-    
-    # 2. Initialize Vision Service
-    vision_service = VisionService(model_path=f"./models/{'owlv2'}/{'v3.1.0'}/model.onnx")
-    if not vision_service.load_model():
-        raise RuntimeError("Failed to load Vision Model. Cannot proceed.")
-
-    # 3. Initialize Camera Service
-    camera_service = CameraService(config)
-    if not camera_service.start_stream():
-        raise ConnectionError("Failed to start the initial FFmpeg camera stream.")
-
-    # 4. Initialize Robot Manager
-    robot_manager = RobotCommandManager(modbus_service)
-    print("--- SYSTEM BOOTSTRAP COMPLETE ---")
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
-@app.on_event("startup")
-async def startup_event():
-    """Runs the setup routine when the API container starts."""
-    # In a real scenario, this fetches config from K8s ConfigMap.
-    # Here we use the default config for bootstrap.
-    global camera_service, vision_service, modbus_service, robot_manager
-    
-    # Mock configuration load
-    mock_config = CameraConfig(camera_id="MAIN_CAM_01", rtsp_url="rtsp://mock_camera_stream", is_active=True)
+@asynccontextmanager
+async def lifespan(app: FastAPI):  # noqa: ARG001 - required signature
+    """Start the pipeline if possible; always allow the API to serve."""
+    if runtime.start_pipeline():
+        logger.info("vision pipeline started")
+    else:
+        logger.warning(
+            "vision pipeline not started (%s); the API will serve with detection "
+            "degraded",
+            runtime.pipeline_status().get("reason"),
+        )
     try:
-        await setup_services(mock_config)
-    except Exception as e:
-        print(f"CRITICAL STARTUP FAILURE: {e}")
-        # The app startup should fail if critical services cannot connect.
-
-
-@app.websocket("/ws/detections")
-async def websocket_endpoint(websocket: WebSocket):
-    """Handles the continuous, real-time data stream from the Camera Service."""
-    await websocket.accept()
-    print("WebSocket client connected. Awaiting stream data.")
-    
-    try:
-        while True:
-            # Simulate receiving processed data packets from the background camera thread/process
-            # In a real setup, we would poll the CameraService's internal queue.
-            await asyncio.sleep(0.1) # Yield control back to the event loop
-            
-            # 1. Simulate reading raw data chunk from the background FFmpeg process
-            # This simulates the CameraService picking up a chunk of raw bytes.
-            mock_raw_bytes = b'\xde\xad\xbe\xef' * 100 # Mock binary data
-            mock_meta = FrameMetadata(
-                camera_id="MAIN_CAM_01",
-                frame_number=int(time.time()*1000),
-                timestamp=datetime.datetime.now(datetime.timezone.utc))
-
-            # 2. Hand-off to Vision Service (Core Logic)
-            detection_payload = DetectionTaskPayload(
-                frame_metadata=mock_meta,
-                raw_frame_data_b64="MOCK_BASE64_STRING_LENGTH_FOR_LONGER_FRAME_SIMULATION"
-            )
-            
-            vision_payload = vision_service.process_frame(detection_payload)
-
-            if vision_payload:
-                # 3. Pass structured data to the Robot Manager
-                # This triggers the Modbus write sequence.
-                success = robot_manager.execute_command_from_detections(vision_payload)
-                if success:
-                    await websocket.send_json({"status": "success", "command_executed": True, "message": "Command sent to robot."})
-                else:
-                    await websocket.send_json({"status": "warning", "command_executed": False, "message": "Robot command failed."})
-
-    except WebSocketDisconnect:
-        print("WebSocket client disconnected.")
+        yield
     finally:
-        # Clean up resources on disconnect
-        await camera_service.stop_stream()
-        modbus_service.close()
-        print("WebSocket session and all resources cleaned up.")
+        runtime.shutdown_pipeline()
 
-@app.get("/health")
-def health_check():
-    """Simple endpoint to check API gateway health."""
-    return {"status": "ok", "service": "API Gateway", "uptime": "Operational"}
 
-# Add additional GET/POST routes for /status and /config here...
+app = FastAPI(
+    title="Industrial Cognition Core API",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
+app.include_router(prompts_router)
+app.include_router(realtime_router)
+
+
+@app.get("/health", tags=["Health"])
+def health() -> dict:
+    """Liveness and readiness.
+
+    Returns 200 whenever the process can answer, even with detection degraded: an
+    unplugged camera must not make Kubernetes restart a healthy API. The pipeline's
+    real state travels in ``pipeline`` so an operator, or a stricter probe, can act
+    on it.
+    """
+    pipeline = runtime.pipeline_status()
+    return {
+        "status": "ok",
+        "service": "API Gateway",
+        "pipeline_running": bool(pipeline.get("running")),
+        "pipeline": pipeline,
+    }
+
+
+@app.get("/status", tags=["Health"])
+def status() -> dict:
+    """Detailed pipeline, throughput and fan-out snapshot."""
+    return runtime.pipeline_status()

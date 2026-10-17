@@ -292,3 +292,38 @@ when a human clicked save.
 and `PROMPT_TOKENIZER_LOCAL_ONLY=1` (the default) forbids a runtime download, which
 an air-gapped industrial network requires. The tokenizer files must therefore be
 baked into the API image or mounted beside the model.
+
+---
+
+## 12. Real-time stream and startup policy
+
+`WS /ws/detections` streams results as they complete. Each message is the
+`src/camera/schemas.py::StreamingPayload` envelope:
+
+```json
+{"metadata": {"camera_id": "cam0", "frame_number": 412, "timestamp": "..."},
+ "detections": [{"object_type": "metal_sheet", "x_norm": 0.31, "y_norm": 0.28,
+                 "width_norm": 0.22, "height_norm": 0.19, "confidence": 0.83}],
+ "timings": {"preprocess_ms": 3.1, "inference_ms": 24.6, "decode_ms": 0.4,
+             "queue_ms": 2.2, "e2e_latency_ms": 31.8},
+ "worker_id": "vision-1:7", "error": null}
+```
+
+The first frame is a `hello` describing the pipeline, so a client can tell
+"connected, nothing detected yet" from "connected, capture is not running".
+
+**A slow client never slows detection.** Each WebSocket subscription owns a
+bounded buffer (120 messages); when it overflows the *oldest* result is dropped and
+counted, and the count is logged on disconnect. Slowing the pipeline to match the
+slowest browser tab would make the robot's view depend on a dashboard. This mirrors
+the dispatcher's own load-shedding policy.
+
+**Startup never fails on missing hardware.** `src/api/runtime.py` starts the runner
+best-effort: a missing camera, model or tokenizer leaves the API serving `/health`,
+`/status` and the prompt endpoints, with `pipeline_running: false` and a `reason`
+explaining why. This is a deliberate reversal of the previous bootstrap, which
+raised from the startup handler and made the API pod crash-loop in the cluster
+because it could not serve `/health` without Modbus, a camera and a model.
+
+Operational knobs: `CAMERA_ENABLED`, `CAMERA_ID`, `CAMERA_SOURCE` (device index,
+V4L2 path or RTSP URL), `CAMERA_FPS`, `PIPELINE_MAX_IN_FLIGHT`.
