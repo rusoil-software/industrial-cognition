@@ -99,9 +99,12 @@ data:
   MODBUS_INTERFACE: "/dev/ttyUSB0"
   MODBUS_BAUD_RATE: "9600"
   MODBUS_SLAVE_ID: "1"
+  # No converter is attached yet (doc/robot-interface.md): the MVP runs the
+  # in-memory controller. Set to rtu (RS-485) or tcp when hardware exists.
+  MODBUS_TRANSPORT: "simulated"
+  MODBUS_SIMULATED_LATENCY_MS: "0"
   MODBUS_HOST: ""
   MODBUS_PORT: "502"
-  MODBUS_TRANSPORT: "rtu"
 
   # --------------------------------------------------------------- observability
   PROMETHEUS_MULTIPROC_DIR: "/tmp/prometheus"

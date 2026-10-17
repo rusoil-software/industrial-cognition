@@ -48,8 +48,13 @@ This list tracks all development tasks required to bring the system from bluepri
   *Caveat:* real detections additionally need a tokenised prompt
   (`scripts/encode_text_queries.py` → `OWL2_TEXT_IDS_PATH`), because the artifact was exported with random
   dummy tokens; see `doc/vision-pipeline.md` §6.
-* 🟡 Robot Interface: Not started in this pass. The Modbus service and command manager remain the stubs from
-  `src/robot/`; the pipeline produces `Detection` objects ready for it.
+* ✅ Robot Interface: Modbus RTU/TCP implemented server-side — `protocol.py` (CRC, framing, PDU builders,
+  exception decoding), `transports.py` (RS-485 via pyserial, Modbus TCP, and a PDU-accurate simulated
+  controller), `service.py` (bounded retries, typed errors, no retry on device refusal) and
+  `integration_manager.py` (detection → millimetres → register units, with STALE_DETECTION / OUT_OF_REACH /
+  HUMAN_ON_SITE refusals). 46 tests in `tests/robot`.
+  **No hardware yet:** the transport defaults to `simulated`, and the register map / units are placeholders
+  to confirm when a converter and the rebuilt robot exist. See `doc/robot-interface.md`.
 * ✅ Orchestration: Per-camera prompt API implemented (`src/api/prompts/`: put/get/delete/list at
   `/cameras/{camera_id}/prompt`), tokenised through `src/vision/prompt.py`, stored in
   `system_metadata` via `src/api/storage/prompt_repository.py`, and carried in each frame payload so a
