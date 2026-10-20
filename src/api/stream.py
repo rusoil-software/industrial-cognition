@@ -46,6 +46,7 @@ from sqlalchemy.orm import Session
 from src.api import runtime
 from src.api.prompts import service as prompt_service
 from src.api.prompts.dependencies import get_db
+from src.api.storage import camera_repository
 
 logger = logging.getLogger(__name__)
 
@@ -59,10 +60,19 @@ BOUNDARY = "frame"
 
 @router.get("/cameras", summary="Cameras, their configured queries and their state")
 def list_cameras(session: Session = Depends(get_db)) -> dict:
+    """Every camera the console should show.
+
+    The list is the union of three sources of truth that can each know about a camera the others do
+    not: the registry (an operator registered it), the prompt table (it was configured before the
+    registry existed) and the running pipeline (it is capturing, however it was configured). Merging
+    them means an operator never sees a camera disappear from the console because it was configured
+    through a different door.
+    """
     runner = runtime.get_runner()
     configured = {prompt.camera_id: prompt for prompt in prompt_service.list_camera_prompts(session)}
+    registered = {camera.id: camera for camera in camera_repository.list_cameras(session)}
 
-    camera_ids = set(configured)
+    camera_ids = set(configured) | set(registered)
     if runner is not None:
         camera_ids.add(runner.stats.camera_id)
 
@@ -70,23 +80,33 @@ def list_cameras(session: Session = Depends(get_db)) -> dict:
     for camera_id in sorted(camera_ids):
         prompt_set = configured.get(camera_id)
         running = runner is not None and runner.stats.camera_id == camera_id
-        cameras.append(
-            {
+        row = registered.get(camera_id)
+        entry = (
+            camera_repository.public_view(row, running=running)
+            if row is not None
+            else {
                 "camera_id": camera_id,
+                "label": camera_id,
+                "source": None,
+                "kind": "unknown",
+                "username": None,
+                "has_credentials": False,
+                "active": False,
                 "running": running,
-                "prompts": (
-                    [
-                        {"label": query.label, "threshold": query.threshold}
-                        for query in prompt_set.queries
-                    ]
-                    if prompt_set
-                    else []
-                ),
-                "capture_fps": (
-                    runner.stats.snapshot()["rates"]["capture_fps"] if running else 0.0
-                ),
             }
         )
+        entry["prompts"] = (
+            [
+                {"label": query.label, "threshold": query.threshold}
+                for query in prompt_set.queries
+            ]
+            if prompt_set
+            else []
+        )
+        entry["capture_fps"] = (
+            runner.stats.snapshot()["rates"]["capture_fps"] if running else 0.0
+        )
+        cameras.append(entry)
     return {"cameras": cameras, "count": len(cameras)}
 
 

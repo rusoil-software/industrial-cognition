@@ -65,8 +65,98 @@
             </label>
             <input class="newcamera" v-model="newCameraId" placeholder="add camera id" />
             <button class="ghost" @click="addCamera" :disabled="!newCameraId">add</button>
+            <button class="ghost" @click="toggleRegistry">
+              {{ showRegistry ? "hide sources" : "sources" }}
+            </button>
             <span class="grow"></span>
             <span class="muted" v-if="streamError">{{ streamError }}</span>
+          </div>
+
+          <div class="registry" v-if="showRegistry">
+            <div class="registry-head">
+              <button class="ghost" @click="scanCameras" :disabled="scanning">
+                {{ scanning ? "scanning…" : "scan for cameras" }}
+              </button>
+              <span class="muted">
+                Local devices and ONVIF cameras on this network. Most IP cameras also work
+                with a plain RTSP URL typed below.
+              </span>
+            </div>
+
+            <div class="registry-group" v-if="discovery.devices.length">
+              <p class="muted">local devices</p>
+              <div v-for="device in discovery.devices" :key="'device-' + device.index" class="registry-item">
+                <span>
+                  {{ device.label || ("device " + device.index) }}
+                  · {{ device.width }}×{{ device.height }}
+                  · {{ device.backend }}
+                </span>
+                <button class="ghost" @click="useSource(String(device.index), device.label)">use</button>
+              </div>
+            </div>
+
+            <div class="registry-group" v-if="discovery.network.length">
+              <p class="muted">network cameras (ONVIF)</p>
+              <div v-for="cam in discovery.network" :key="cam.address" class="registry-item">
+                <span>{{ cam.name || cam.address }} · {{ cam.address }}</span>
+                <button class="ghost" @click="useSource(cam.address, cam.name)">use</button>
+              </div>
+            </div>
+
+            <p class="muted" v-if="scanned && !discovery.devices.length && !discovery.network.length">
+              Nothing answered. Enter the camera's RTSP address below - ONVIF is often disabled,
+              and broadcasting does not cross VLANs.
+            </p>
+            <p class="muted" v-if="registryHint">{{ registryHint }}</p>
+
+            <form class="registry-form" @submit.prevent="registerCamera">
+              <label class="field inline">
+                <span>id</span>
+                <input v-model="register.id" placeholder="door-cam" required />
+              </label>
+              <label class="field inline">
+                <span>label</span>
+                <input v-model="register.label" placeholder="Workshop door" />
+              </label>
+              <label class="field inline grow">
+                <span>source</span>
+                <input v-model="register.source" placeholder="rtsp://10.0.0.5:554/stream1" required />
+              </label>
+              <label class="field inline">
+                <span>user</span>
+                <input v-model="register.username" autocomplete="username" />
+              </label>
+              <label class="field inline">
+                <span>password</span>
+                <input type="password" v-model="register.password" autocomplete="current-password" />
+              </label>
+              <label class="field inline">
+                <input type="checkbox" v-model="register.activate" />
+                <span>activate now</span>
+              </label>
+              <button type="submit" :disabled="registering">
+                {{ registering ? "registering…" : "register" }}
+              </button>
+            </form>
+
+            <div class="registry-item" v-for="camera in cameras" :key="'registered-' + camera.camera_id">
+              <span>
+                <strong>{{ camera.camera_id }}</strong>
+                <template v-if="camera.label"> · {{ camera.label }}</template>
+                · {{ camera.kind }}
+                · {{ camera.source || "no source" }}
+                <em v-if="camera.active">active</em>
+                <em v-if="camera.has_credentials">password stored</em>
+              </span>
+              <button class="ghost" @click="probeCamera(camera.camera_id)">probe</button>
+              <button
+                class="ghost"
+                @click="activateCamera(camera.camera_id)"
+                :disabled="camera.active && camera.running"
+              >
+                activate
+              </button>
+            </div>
           </div>
 
           <div class="viewport" ref="viewport">

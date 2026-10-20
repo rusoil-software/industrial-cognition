@@ -28,3 +28,8 @@ redis==7.2
 # tokenises it (doc/vision-pipeline.md section 11). Tokenizer only - this must not
 # drag in torch, because this image has no inference stack.
 transformers==5.20.1
+
+# Camera credential encryption at rest (src/camera/credentials.py). A separate dependency
+# from pyjwt on purpose: the JWT signing key and the camera-credential key must be able to
+# rotate independently.
+cryptography==50.0.2

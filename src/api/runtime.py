@@ -34,12 +34,70 @@ import logging
 import os
 from typing import Any, Optional
 
-__all__ = ["get_runner", "pipeline_status", "set_runner", "shutdown_pipeline", "start_pipeline"]
+__all__ = [
+    "capture_config",
+    "get_runner",
+    "pipeline_status",
+    "registry_status",
+    "restart_pipeline",
+    "set_runner",
+    "shutdown_pipeline",
+    "start_error",
+    "start_pipeline",
+]
 
 logger = logging.getLogger(__name__)
 
 _RUNNER: Optional[Any] = None
 _START_ERROR: Optional[str] = None
+_SUPERVISOR: Optional[Any] = None
+
+
+def _registry_watch_enabled() -> bool:
+    return os.getenv("CAMERA_REGISTRY_WATCH", "0").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "",
+    )
+
+
+def _registry_activate(source: str, camera_id: str) -> bool:
+    """Restart capture on the registry's camera. Called from the supervisor thread."""
+    return restart_pipeline(source=source, camera_id=camera_id)
+
+
+def _start_registry_watch() -> None:
+    """Follow the camera registry, when this process is the capture process.
+
+    Opt-in (`CAMERA_REGISTRY_WATCH=1`): the API pod in production is not the capture pod,
+    and a second process restarting capture would fight the real one over the device.
+    """
+    global _SUPERVISOR
+    if _SUPERVISOR is not None:
+        return
+    from src.camera.credentials import CredentialVault
+    from src.camera.supervisor import RegistrySupervisor, registry_scan
+
+    vault = CredentialVault.from_environment()
+    poll_seconds = float(os.getenv("CAMERA_REGISTRY_POLL_SECONDS", "5") or 5)
+    supervisor = RegistrySupervisor(
+        scan=lambda: registry_scan(vault),
+        on_activate=_registry_activate,
+        poll_seconds=poll_seconds,
+        current=lambda: (pipeline_status().get("pipeline") or {}).get("camera_id"),
+    )
+    supervisor.start()
+    _SUPERVISOR = supervisor
+    logger.info("camera registry watch enabled (poll every %.1fs)", poll_seconds)
+
+
+def registry_status() -> dict:
+    """Snapshot of the registry watcher for /status."""
+    supervisor = _SUPERVISOR
+    if supervisor is None:
+        return {"running": False, "enabled": _registry_watch_enabled()}
+    return {**supervisor.snapshot(), "enabled": True}
 
 
 def get_runner():
@@ -52,13 +110,17 @@ def set_runner(runner) -> None:  # noqa: ANN001 - PipelineRunner
     _RUNNER = runner
 
 
-def _capture_config():  # noqa: ANN202
+def _capture_config(
+    source: Optional[str] = None, camera_id: Optional[str] = None
+):  # noqa: ANN202
     from src.camera.capture import CaptureConfig
 
-    source = os.getenv("CAMERA_SOURCE", "0")
+    resolved_source = source if source is not None else os.getenv("CAMERA_SOURCE", "0")
     return CaptureConfig(
-        camera_id=os.getenv("CAMERA_ID", "cam0"),
-        source=int(source) if source.isdigit() else source,
+        camera_id=camera_id or os.getenv("CAMERA_ID", "cam0"),
+        source=(
+            int(resolved_source) if resolved_source.isdigit() else resolved_source
+        ),
         width=int(os.getenv("CAMERA_WIDTH", "1920")),
         height=int(os.getenv("CAMERA_HEIGHT", "1080")),
         # Device negotiation wants whole frames per second; the pipeline target
@@ -67,6 +129,16 @@ def _capture_config():  # noqa: ANN202
         jpeg_quality=int(os.getenv("CAMERA_JPEG_QUALITY", "80")),
         encode_max_side=int(os.getenv("CAMERA_ENCODE_MAX_SIDE", "960")),
     )
+
+
+def capture_config():  # noqa: ANN202
+    """The capture configuration the pipeline would use now.
+
+    Public so the camera probe (`src/camera/probe.py`) opens a device with the same resolution and
+    FPS hints as capture - a probe that negotiates differently can claim a camera works while the
+    pipeline then fails to open it.
+    """
+    return _capture_config()
 
 
 def _write_detections(result) -> int:
@@ -139,11 +211,17 @@ def _prompt_provider(camera_id: str):
         session.close()
 
 
-def start_pipeline() -> bool:
+def start_pipeline(
+    source: Optional[str] = None, camera_id: Optional[str] = None
+) -> bool:
     """Build and start the runner. Returns whether capture is running.
 
     Never raises: a missing camera, model or tokenizer degrades the service rather
     than preventing it from starting.
+
+    ``source`` and ``camera_id`` override the environment defaults so the console can
+    switch the service to a registered camera (`POST /cameras/{id}/activate`) without a
+    redeploy. Leaving them ``None`` keeps the overlay's ``CAMERA_SOURCE`` in force.
     """
     global _START_ERROR
 
@@ -157,8 +235,9 @@ def start_pipeline() -> bool:
         from src.pipeline.runner import PipelineRunner, RunnerConfig
         from src.pipeline.celery_transport import CeleryTransport
 
+        capture = _capture_config(source=source, camera_id=camera_id)
         config = RunnerConfig(
-            capture=_capture_config(),
+            capture=capture,
             target_fps=float(os.getenv("CAMERA_FPS", "60")),
             max_in_flight=int(os.getenv("PIPELINE_MAX_IN_FLIGHT", "64")),
         )
@@ -179,6 +258,11 @@ def start_pipeline() -> bool:
 
         set_runner(runner)
         _START_ERROR = None
+        if _registry_watch_enabled():
+            try:
+                _start_registry_watch()
+            except Exception:  # noqa: BLE001 - the registry is optional, capture is not
+                logger.exception("camera registry watch could not be started")
         return True
     except Exception as exc:  # noqa: BLE001 - startup must not be fatal
         _START_ERROR = f"{type(exc).__name__}: {exc}"
@@ -186,9 +270,17 @@ def start_pipeline() -> bool:
         return False
 
 
+def _stop_registry_watch() -> None:
+    global _SUPERVISOR
+    supervisor, _SUPERVISOR = _SUPERVISOR, None
+    if supervisor is not None:
+        supervisor.stop()
+
+
 def shutdown_pipeline(timeout: float = 10.0) -> None:
     """Stop the runner if it is running."""
     global _RUNNER
+    _stop_registry_watch()
     runner = _RUNNER
     if runner is not None:
         try:
@@ -197,6 +289,39 @@ def shutdown_pipeline(timeout: float = 10.0) -> None:
             logger.exception("error while stopping the vision pipeline")
         finally:
             _RUNNER = None
+
+
+def restart_pipeline(
+    source: Optional[str] = None,
+    camera_id: Optional[str] = None,
+    timeout: float = 10.0,
+) -> bool:
+    """Stop whatever is capturing and start again - on *source* when one is given.
+
+    Stopping first is not optional: one process owns one capture device, and a device that allows
+    a single open (most USB cameras) would otherwise refuse the new one with "device busy". The
+    stop is bounded by ``timeout``, so a wedged capture thread cannot block the HTTP request
+    forever.
+
+    Returns whether capture is running afterwards; ``start_error()`` says why when it is not.
+    """
+    global _START_ERROR
+
+    shutdown_pipeline(timeout=timeout)
+    _START_ERROR = None
+    started = start_pipeline(source=source, camera_id=camera_id)
+    if started:
+        logger.info(
+            "capture restarted on camera %s (source %s)",
+            camera_id or os.getenv("CAMERA_ID", "cam0"),
+            "registered source" if source is not None else os.getenv("CAMERA_SOURCE", "0"),
+        )
+    return started
+
+
+def start_error() -> Optional[str]:
+    """Why the pipeline is not running, or ``None`` when it is (or was never asked to)."""
+    return _START_ERROR
 
 
 def pipeline_status() -> dict:

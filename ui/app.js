@@ -35,6 +35,13 @@ createApp({
     const cameras = ref([]);
     const cameraId = ref("main");
     const newCameraId = ref("");
+    const showRegistry = ref(false);
+    const scanning = ref(false);
+    const scanned = ref(false);
+    const discovery = ref({ devices: [], network: [], hint: "" });
+    const register = ref({ id: "", label: "", source: "", username: "", password: "", activate: true });
+    const registering = ref(false);
+    const registryHint = ref("");
     const queries = ref([{ label: "metal sheet", threshold: 0.25 }]);
     const applied = ref([]);
     const detections = ref([]);
@@ -124,6 +131,105 @@ createApp({
       newCameraId.value = "";
       refreshCameras();
       loadPrompts();
+    }
+
+    function toggleRegistry() {
+      showRegistry.value = !showRegistry.value;
+      // Scanning opens every local device and waits for ONVIF answers (seconds), so it
+      // runs when the operator asks for it - never on page load.
+      if (!showRegistry.value) registryHint.value = "";
+    }
+
+    async function scanCameras() {
+      scanning.value = true;
+      registryHint.value = "";
+      try {
+        const body = await api("/cameras/discover?include_network=true&timeout=2.0");
+        discovery.value = {
+          devices: body.devices || [],
+          network: body.network || [],
+          hint: body.hint || "",
+        };
+        scanned.value = true;
+        if (!body.credentials_configured) {
+          registryHint.value =
+            "CAMERA_CRED_KEY is not configured on the server: cameras that need a password " +
+            "cannot be registered until it is set (doc/camera.md).";
+        }
+      } catch (error) {
+        flash(String(error.message || error), "error");
+      } finally {
+        scanning.value = false;
+      }
+    }
+
+    function slugifySource(text) {
+      const slug = String(text || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 48);
+      return slug || "camera";
+    }
+
+    function useSource(source, label) {
+      register.value.source = String(source);
+      if (!register.value.id.trim()) {
+        register.value.id = slugifySource(register.value.source);
+      }
+      if (label && !register.value.label.trim()) {
+        register.value.label = label;
+      }
+    }
+
+    async function registerCamera() {
+      registering.value = true;
+      try {
+        const body = await api("/cameras", {
+          method: "POST",
+          body: JSON.stringify({
+            id: register.value.id.trim(),
+            label: register.value.label.trim() || register.value.id.trim(),
+            source: register.value.source.trim(),
+            username: register.value.username.trim() || null,
+            password: register.value.password || null,
+            activate: register.value.activate,
+          }),
+        });
+        flash(`camera ${body.camera_id} registered`, "ok");
+        register.value = { id: "", label: "", source: "", username: "", password: "", activate: true };
+        cameraId.value = body.camera_id;
+        await refreshCameras();
+        onCameraChange();
+      } catch (error) {
+        flash(String(error.message || error), "error");
+      } finally {
+        registering.value = false;
+      }
+    }
+
+    async function activateCamera(id) {
+      try {
+        await api(`/cameras/${encodeURIComponent(id)}/activate`, { method: "POST" });
+        flash(`capture follows ${id}`, "ok");
+        cameraId.value = id;
+        await refreshCameras();
+        streaming.value = false;
+        nextTick(startStream);
+      } catch (error) {
+        flash(String(error.message || error), "error");
+      }
+    }
+
+    async function probeCamera(id) {
+      try {
+        const body = await api(`/cameras/${encodeURIComponent(id)}/probe`, { method: "POST" });
+        registryHint.value = body.ok
+          ? `${id}: ${body.width}×${body.height} in ${Math.round(body.latency_ms)} ms`
+          : `${id}: ${body.detail}`;
+      } catch (error) {
+        flash(String(error.message || error), "error");
+      }
     }
 
     function onCameraChange() {
@@ -377,6 +483,19 @@ createApp({
       cameras,
       cameraId,
       newCameraId,
+      showRegistry,
+      scanning,
+      scanned,
+      discovery,
+      register,
+      registering,
+      registryHint,
+      toggleRegistry,
+      scanCameras,
+      useSource,
+      registerCamera,
+      activateCamera,
+      probeCamera,
       queries,
       applied,
       detections,

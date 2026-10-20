@@ -192,3 +192,44 @@ table.applied th {
 table.applied td { padding: 4px 2px; border-bottom: 1px solid #1a2438; }
 
 .footer { padding: 0 16px 16px; }
+
+/* Camera sources: discovery results, the register form, and the registry rows. Compact
+   by design - this sits above the preview and must not push it off the screen. */
+.registry {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  margin-bottom: 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.registry-head { display: flex; gap: 8px; align-items: center; }
+.registry-head .muted { flex: 1; }
+
+.registry-group { display: grid; gap: 4px; }
+.registry-group p { margin: 0; color: var(--muted); }
+
+.registry-item {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 6px;
+  background: var(--panel-2);
+  border-radius: 6px;
+}
+.registry-item span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.registry-item em { color: var(--muted); font-style: normal; margin-left: 6px; }
+
+.registry-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: flex-end;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+.registry-form .field.inline.grow { flex: 1 1 240px; }
+.registry-form button { align-self: flex-end; }

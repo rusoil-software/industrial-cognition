@@ -21,6 +21,11 @@ spec:
               value: "replay:/app/assets/images/roboflow_test_detect_human_robot.webp"
             - name: CAMERA_ID
               value: "main"
+            # This pod *is* the capture process here, so it follows the camera registry the
+            # same way the camera Deployment does in production: activating a camera in the
+            # console then survives a pod restart instead of reverting to CAMERA_SOURCE.
+            - name: CAMERA_REGISTRY_WATCH
+              value: "1"
             # CPU inference is ~11 s/frame, so capture slowly and keep the window small.
             - name: CAMERA_FPS
               value: "0.2"

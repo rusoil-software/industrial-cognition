@@ -50,6 +50,7 @@ from src.api.auth_routes import router as auth_router
 from src.api.auth import get_settings as auth_settings
 from src.api.realtime import router as realtime_router
 from src.api.stream import router as stream_router
+from src.api.cameras import router as cameras_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -102,6 +103,7 @@ if not _docs_enabled:
 app.include_router(prompts_router)
 app.include_router(realtime_router)
 app.include_router(stream_router)
+app.include_router(cameras_router)
 app.include_router(auth_router)
 
 
@@ -162,7 +164,7 @@ def health() -> dict:
 @app.get("/status", tags=["Health"])
 def status() -> dict:
     """Detailed pipeline, throughput and fan-out snapshot."""
-    return runtime.pipeline_status()
+    return {**runtime.pipeline_status(), "registry": runtime.registry_status()}
 
 
 @app.get("/readyz", tags=["Health"], response_model=None)

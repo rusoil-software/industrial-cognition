@@ -44,6 +44,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     Enum,
@@ -55,6 +56,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
@@ -62,6 +64,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 __all__ = [
     "Base",
+    "Camera",
     "DetectionResult",
     "ENUM_TYPE_NAMES",
     "ObjectType",
@@ -319,3 +322,89 @@ class SystemMetadata(Base):
             name="processing_fps_non_negative",
         ),
     )
+
+
+class Camera(Base):
+    """A camera an operator registered, and how to open it.
+
+    The pipeline used to be configured only by environment variables (``CAMERA_SOURCE``,
+    ``CAMERA_ID``), which is right for one fixed camera in an overlay and wrong as soon as an
+    operator wants to point the same service at "the camera at the entrance" without a redeploy.
+    This table is the registry: one row per camera, with the source it opens and the credentials
+    to open it.
+
+    Two decisions worth keeping:
+
+    * **The password is ciphertext.** ``password_encrypted`` holds a Fernet token
+      (``src/camera/credentials.py``); the key lives in the Secret. A database dump is then not a
+      camera-password dump. The API never returns the value, only whether one is stored.
+    * **At most one camera is active.** The API runs a single capture pipeline today (concurrent
+      multi-camera capture is Stage 3 work, tasklist item 9), so "active" is a schema fact rather
+      than a convention the routes must remember: the partial unique index
+      ``ux_cameras_only_one_active`` makes a second ``active = true`` row impossible, even when two
+      operators click Activate at the same time.
+    """
+
+    __tablename__ = "cameras"
+
+    id: Mapped[str] = mapped_column(
+        String(64),
+        primary_key=True,
+        doc="Stable slug used in prompts, WebSocket messages and URLs "
+        "(e.g. 'entrance-gate').",
+    )
+    label: Mapped[str] = mapped_column(
+        String(128),
+        nullable=False,
+        doc="What the operator calls it. Shown in the console.",
+    )
+    source: Mapped[str] = mapped_column(
+        String(512),
+        nullable=False,
+        doc="What the pipeline opens: a device index, an rtsp:// URL without "
+        "credentials, replay:/path, or 'synthetic'.",
+    )
+    username: Mapped[Optional[str]] = mapped_column(
+        String(128),
+        nullable=True,
+        doc="Camera login, when one is needed. Not secret on its own.",
+    )
+    password_encrypted: Mapped[Optional[str]] = mapped_column(
+        String(512),
+        nullable=True,
+        doc="Fernet token for the camera password; NULL when the camera is open. "
+        "Decrypted only when a connection is opened.",
+    )
+    active: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("false"),
+        doc="Whether the pipeline is currently capturing this camera. At most "
+        "one row may be active (partial unique index).",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+        doc="Last write, maintained by the database.",
+    )
+
+    # One pipeline, one active camera: enforce it in the schema, not in a comment. The index is
+    # partial, so the many `active = false` rows are not indexed at all and cannot collide.
+    __table_args__ = (
+        Index(
+            "ux_cameras_only_one_active",
+            "active",
+            unique=True,
+            postgresql_where=text("active"),
+        ),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<Camera {self.id} active={self.active}>"

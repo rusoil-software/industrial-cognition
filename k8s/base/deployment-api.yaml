@@ -96,6 +96,15 @@ spec:
             - name: JWT_SECRET
               valueFrom:
                 secretKeyRef: { name: industrial-cognition-secrets, key: JWT_SECRET }
+            # Fernet key for camera passwords (`cameras.password_encrypted`). Optional:
+            # without it the registry still lists and activates cameras that need no
+            # credentials, and storing a password answers 503 naming the key.
+            - name: CAMERA_CRED_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: industrial-cognition-secrets
+                  key: CAMERA_CRED_KEY
+                  optional: true
             # The API serves the surface; capture runs in the `camera` Deployment.
             # Two capture loops would enqueue every frame twice.
             - name: CAMERA_ENABLED

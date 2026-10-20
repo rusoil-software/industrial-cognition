@@ -76,11 +76,12 @@ sheds frames with bounded latency otherwise, both asserted by tests.
 
 ### **Pre-Stage 3 backlog (agreed 2026-10-17)**
 
-**Status 2026-10-20: 8 of 13 done.** Done: 1 (model on PVC), 2 (two workers), 4 (persistence),
+**Status 2026-10-20: 9 of 13 implemented.** Done: 1 (model on PVC), 2 (two workers), 4 (persistence),
 5 (readiness), 6 (auth hardening), 8 (queue hygiene), 10 (CI), plus the `object_type` follow-up.
-Open: 3 (real camera - waiting on hardware), 7 (ingress/TLS), 9 (multi-camera), 11 (detection
-quality dataset), 12 (GPU decision); 13 (model delivery) is deferred by agreement with the MinIO
-replacement.
+Implemented but not yet validated with hardware: 3 (camera discovery + registry - code, console
+and tests are in place, no IP camera on the network yet). Open: 7 (ingress/TLS), 9 (multi-camera),
+11 (detection quality dataset), 12 (GPU decision); 13 (model delivery) is deferred by agreement
+with the MinIO replacement.
 
 Ordered roughly by what blocks what. Items 1-3 are the ones we named; the rest are gaps this
 build exposed that will cost more to fix later than now.
@@ -110,15 +111,23 @@ Full table and reasoning in `doc/vision-pipeline.md` §16. Remaining levers, not
 the 1.55 GB image (`onnxruntime-gpu` dominates and the GPU path needs it) and the architectural
 one - a single inference service with thin Celery clients, instead of one model per replica.
 
-**3. &#9744; Find the real camera from the OS and run it end to end.**
-Windows: `Get-PnpDevice -Class Camera` for the device, OpenCV `CAP_DSHOW` for the index.
-Linux: `/dev/video*` plus `v4l2-ctl --list-devices --list-formats-ext` to confirm MJPG at the
-target rate. **Containers cannot see a USB camera on Docker Desktop/WSL**, so the practical
-path is to run capture on the host and publish RTSP (ffmpeg or mediamtx), then point
-`CAMERA_SOURCE=rtsp://...` at it - the same code path production uses. `DeviceFrameSource`
-already negotiates MJPG, sets `CAP_PROP_BUFFERSIZE=1` and warns when the negotiated FPS is
-below 90% of the request; add a `scripts/probe_camera.py` that lists devices, formats and the
-achievable FPS so this is diagnosable rather than guesswork.
+**3. &#9744; Find the real camera from the OS and run it end to end.** - implemented 2026-10-20,
+hardware validation pending
+*Implemented:* `GET /cameras/discover` lists local OpenCV devices (each index tried per
+backend and required to deliver a frame) and ONVIF cameras found by WS-Discovery; the
+`cameras` table plus `POST /cameras` store a camera with a Fernet-encrypted password
+(`CAMERA_CRED_KEY`, separate from `JWT_SECRET`); `POST /cameras/{id}/probe` opens the source,
+reads one frame and reports resolution/latency with redacted output; activation is a single
+transaction guarded by the partial unique index `ux_cameras_only_one_active`, and the capture
+pod follows it by polling (`CAMERA_REGISTRY_WATCH=1`, 5 s) because capture and the API share
+only the database. The console gained a **sources** panel: scan, use, register, probe,
+activate. Full reference: `doc/camera.md`. 62 new tests (`tests/camera/`, `tests/api/test_cameras.py`).
+*Not yet done:* a real camera end to end. There is no IP camera on this network and the
+laptop camera is not visible to Docker Desktop/WSL, so the realistic route stays "publish
+RTSP from the host, register the URL" - which is now one form submission instead of an env
+change and a redeploy. `DeviceFrameSource` already negotiates MJPG with
+`CAP_PROP_BUFFERSIZE=1`; a `scripts/probe_camera.py` that prints formats and achievable FPS
+is still the missing diagnostic.
 *Done when:* real frames reach the console with overlays, at a documented resolution/FPS.
 
 **4. &#9745; Persist detections.** - done 2026-10-20

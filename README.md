@@ -279,6 +279,7 @@ The following files detail *how* to build and *how* to maintain the system:
 * **`doc/conventions.md`**: Contains the hard rules (KISS, SRP, Modbus usage) that every line of code must follow.
 * **`doc/tasklist.md`**: The master tracker for tracking all remaining development tasks.
 * **`doc/k8s.md`**: The Kubernetes deployment model, operator runbook and manifest validation contract.
+* **`doc/camera.md`**: Camera discovery, the camera registry, password handling and the sources panel.
 
 <!-- ROADMAP -->
 ## Roadmap

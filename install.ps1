@@ -104,11 +104,24 @@ function Ensure-Secrets {
     if (-not (Test-Path $example)) { Fail "k8s/base/secrets.env.example is missing" }
 
     $random = { -join ((48..57) + (97..122) | Get-Random -Count 32 | ForEach-Object { [char]$_ }) }
+    # A Fernet key is 32 random bytes, urlsafe-base64 - not 32 random characters. The
+    # vault rejects anything else, so it must be generated as bytes, not via $random.
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $buffer = New-Object byte[] 32
+        $rng.GetBytes($buffer)
+        $fernet = ([Convert]::ToBase64String($buffer)).Replace('+', '-').Replace('/', '_')
+    } finally {
+        $rng.Dispose()
+    }
     $lines = foreach ($line in Get-Content $example) {
         if ($line -match '^([A-Z0-9_]+)=') {
             $key = $Matches[1]
+            if ($key -eq 'CAMERA_CRED_KEY') {
+                "$key=$fernet"
+            }
             # Keep identifiers stable (they appear in manifests); rotate every secret.
-            if ($key -match '_(USER|DB|NAME|URL|KEY)$' -and $key -notmatch 'SECRET|PASS|TOKEN|COOKIE') {
+            elseif ($key -match '_(USER|DB|NAME|URL|KEY)$' -and $key -notmatch 'SECRET|PASS|TOKEN|COOKIE') {
                 $line
             } else {
                 "$key=$(& $random)"

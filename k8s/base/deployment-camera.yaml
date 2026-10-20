@@ -107,6 +107,23 @@ spec:
               value: "0.2"
             - name: CAMERA_ID
               value: "main"
+            # Follow the camera registry: `POST /cameras/{id}/activate` writes one row and
+            # this pod restarts capture on it within CAMERA_REGISTRY_POLL_SECONDS. Without
+            # this the activation would only affect the pod that served the request,
+            # which in production is the API pod - i.e. not the one holding the device.
+            - name: CAMERA_REGISTRY_WATCH
+              value: "1"
+            - name: CAMERA_REGISTRY_POLL_SECONDS
+              value: "5"
+            # Fernet key for `cameras.password_encrypted`. Optional on purpose: a cluster
+            # that does not store camera passwords starts normally, and registration
+            # answers 503 instead of failing the pod on a missing Secret key.
+            - name: CAMERA_CRED_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: industrial-cognition-secrets
+                  key: CAMERA_CRED_KEY
+                  optional: true
             # CPU inference costs ~11 s/frame, so a 64-frame window means the newest
             # frame waits ~10 minutes. The window must be sized from capacity, not left
             # large: 2 frames keeps end-to-end latency near one inference.

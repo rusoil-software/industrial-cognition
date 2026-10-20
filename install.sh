@@ -117,7 +117,12 @@ ensure_secrets() {
     while IFS= read -r line; do
         if [[ "${line}" =~ ^([A-Z0-9_]+)= ]]; then
             key="${BASH_REMATCH[1]}"
-            if [[ "${key}" =~ _(USER|DB|NAME|URL|KEY)$ && ! "${key}" =~ SECRET|PASS|TOKEN|COOKIE ]]; then
+            if [[ "${key}" == "CAMERA_CRED_KEY" ]]; then
+                # Fernet key: 32 random bytes, urlsafe-base64 (see doc/camera.md).
+                # The vault rejects anything that is not a valid Fernet key.
+                value="$(head -c 32 /dev/urandom | base64 | tr '+/' '-_')"
+                printf '%s=%s\n' "${key}" "${value}" >> "${target}"
+            elif [[ "${key}" =~ _(USER|DB|NAME|URL|KEY)$ && ! "${key}" =~ SECRET|PASS|TOKEN|COOKIE ]]; then
                 printf '%s\n' "${line}" >> "${target}"
             else
                 value="$(head -c 24 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 32)"
