@@ -262,6 +262,27 @@ The artifact lives on a PVC and is copied by hand. Revisit together with the Min
   "Object storage (S3)".
 * 🔴 **RabbitMQ HA.** The broker is a replicated-single StatefulSet. True multi-node clustering needs the
   RabbitMQ Cluster Operator; see `doc/k8s.md` §2 "RabbitMQ clustering".
+* 🔴 **Image delivery, and a model+runtime container.** Two linked questions, both deferred until the MVP runs
+  end to end (they depend on items 12 and 13).
+  * **Publish the images.** Every deployment today builds `api` and `vision` locally (`docker build` plus
+    `minikube image load` / `kind load docker-image`). That is fine on a workstation and wrong for a line with
+    several nodes and no outbound access: publish to Docker Hub (public) or a private/internal registry, tag by
+    commit, and **pin digests** in the overlays. Digest pinning is the part that matters most — `:dev` / `:latest`
+    cannot say what is actually running, which is exactly the question an incident asks.
+    *Scope:* `scripts/build-images.sh`, the `image:` fields (or a per-overlay kustomize `images:` block), both
+    installers and the CI cluster job.
+  * **One verified image for model + runtime.** The worker is currently `python:3.11-slim` + pip-installed
+    `onnxruntime` (CPU) + a 293 MiB ONNX artifact on a PVC: one session peaks at ~2 GiB with the arena off and
+    CPU inference runs 8.5-11 s/frame (`doc/vision-pipeline.md` §13, §16). Two directions to evaluate:
+    (a) base the worker on a **vendor-verified runtime image** (ONNX Runtime GPU / TensorRT containers) instead
+    of pip-installing a runtime and hoping it matches the hardware, and (b) build a **model image** — the model
+    plus runtime baked in, optionally including a TensorRT engine built for the target GPU. That would remove the
+    model PVC, the loader Job and the "is the artifact the right one?" class of failure entirely, and should
+    reduce per-session RSS and speed up load beyond the measured 1.3 s + 10.8 s warmup.
+    *Unknown until measured:* whether a GPU image actually lowers latency on the target hardware — that is item
+    12's question, this item is "with what, once we know where". A model image also gives item 13 a different
+    answer than MinIO: nothing to deliver if the model ships inside the container, at the cost of a larger image
+    that a registry makes cheap to cache and expensive to rebuild blindly.
 
 ### **Fixed while doing item 1**
 
