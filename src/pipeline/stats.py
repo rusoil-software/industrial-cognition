@@ -166,6 +166,7 @@ class PipelineStats:
     dropped_capacity: int = 0
     dropped_encode: int = 0
     dropped_stale: int = 0
+    shed_sampling: int = 0
 
     capture_fps: FpsMeter = field(init=False)
     completion_fps: FpsMeter = field(init=False)
@@ -234,6 +235,17 @@ class PipelineStats:
         with self._lock:
             self.dropped_encode += count
 
+    def record_shed_sampling(self, count: int = 1) -> None:
+        """A frame capture took but deliberately did not send to the workers.
+
+        Distinct from ``dropped_capacity``: backpressure means the workers were too slow
+        to take a frame we offered them, sampling means the pipeline never offered it -
+        the frame was captured for the live preview only. Lumping the two together makes
+        a healthy 5 FPS preview look like a collapsing pipeline.
+        """
+        with self._lock:
+            self.shed_sampling += count
+
     # -- readout -----------------------------------------------------------
     def snapshot(self) -> dict[str, object]:
         """Return a JSON-serialisable snapshot for logging, /metrics or the API."""
@@ -247,6 +259,7 @@ class PipelineStats:
                 "dropped_capacity": self.dropped_capacity,
                 "dropped_stale": self.dropped_stale,
                 "dropped_encode": self.dropped_encode,
+                "shed_sampling": self.shed_sampling,
             }
         uptime = max(1e-9, time.monotonic() - self._started)
         capture_fps = round(self.capture_fps.fps(), 2)

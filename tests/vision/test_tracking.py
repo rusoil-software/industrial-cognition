@@ -325,6 +325,74 @@ def test_the_environment_variable_name_is_stable():
     assert TRACKER_TYPE_ENV == "TRACKER_TYPE"
 
 
+def test_an_object_that_moved_further_than_its_width_keeps_one_track():
+    # The report: an object that moved faster than inference could follow appeared twice
+    # once it stood still - the old box expiring next to a fresh one. The fresh detection
+    # no longer overlaps the previous box, but its centre is inside the distance gate.
+    pool = pool_with()
+    pool.seed(frame(), [detection(x=0.10, y=0.20, w=0.10, h=0.10)])
+    first = pool._tracks[0]
+
+    pool.seed(frame(), [detection(x=0.34, y=0.20, w=0.10, h=0.10)])
+
+    assert len(pool._tracks) == 1
+    assert pool._tracks[0] is first
+    assert pool._tracks[0].tracker.inits == 1
+
+
+def test_the_distance_gate_can_be_switched_off():
+    pool = pool_with(match_distance=0.0)
+    pool.seed(frame(), [detection(x=0.10, y=0.20, w=0.10, h=0.10)])
+
+    pool.seed(frame(), [detection(x=0.34, y=0.20, w=0.10, h=0.10)])
+
+    assert len(pool._tracks) == 2
+
+
+def test_two_tracks_that_end_up_on_one_object_are_collapsed():
+    # Distance matching stops new duplicates; this is the clean-up for a pair that
+    # already exists (two seeds, or two trackers converging on the same object).
+    pool = pool_with()
+    pool.seed(
+        frame(),
+        [
+            detection(x=0.10, y=0.20, w=0.10, h=0.10, confidence=0.9),
+            detection(x=0.70, y=0.70, w=0.10, h=0.10, confidence=0.8),
+        ],
+    )
+    older, younger = sorted(pool._tracks, key=lambda track: track.track_id)
+    # Both the reported box and the tracker's own box, because the fake tracker reports
+    # what it was initialised with, moved by its offset.
+    for track, box in ((older, (100.0, 100.0, 80.0, 60.0)), (younger, (106.0, 103.0, 80.0, 60.0))):
+        track.box = box
+        track.tracker.box = box
+
+    tracks = pool.update(frame())
+
+    assert len(tracks) == 1
+    assert tracks[0]["track_id"] == older.track_id
+    assert pool.snapshot()["merged"] == 1
+    assert [track.track_id for track in pool._tracks] == [older.track_id]
+
+
+def test_different_labels_on_one_box_are_left_alone():
+    pool = pool_with()
+    pool.seed(
+        frame(),
+        [
+            detection("person", x=0.10, y=0.20, w=0.10, h=0.10),
+            detection("robot", x=0.10, y=0.20, w=0.10, h=0.10),
+        ],
+    )
+
+    tracks = pool.update(frame())
+
+    assert len(tracks) == 2
+    assert {track["object_type"] for track in tracks} == {"person", "robot"}
+    assert pool.snapshot()["merged"] == 0
+
+
+
 @pytest.mark.skipif("csrt" not in available_trackers(), reason="needs opencv-contrib trackers")
 def test_a_real_tracker_follows_a_moving_square():
     """A last, honest check that the wiring works with OpenCV's own tracker."""

@@ -432,20 +432,12 @@ createApp({
         context.fillText(text, left + padding, labelY + 12);
       }
 
-      // The last inference, drawn thin and dashed: this is what the model actually said,
-      // which on a GPU-less host may be several seconds old.
-      if (tracks.value.length) {
-        context.save();
-        context.globalAlpha = 0.55;
-        context.setLineDash([4, 4]);
-        context.lineWidth = 1;
-        for (const detection of detections.value) {
-          const { x, y, w, h } = box(detection);
-          context.strokeStyle = colourFor(detection.object_type);
-          context.strokeRect(x, y, w, h);
-        }
-        context.restore();
-      } else {
+      // Without trackers the last inference is all we have: draw it solid, with its
+      // confidence, and say nothing about where the object is now. With trackers the
+      // inference boxes would be a second, older opinion painted over the live video -
+      // they lag by a whole inference, so they contradict the picture instead of
+      // explaining it. Only tracks are drawn then.
+      if (!tracks.value.length) {
         for (const detection of detections.value) {
           const { x, y, w, h } = box(detection);
           const colour = colourFor(detection.object_type);

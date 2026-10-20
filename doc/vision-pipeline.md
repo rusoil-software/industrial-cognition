@@ -658,23 +658,48 @@ more per update. At 10 updates/s next to a 2-thread inference, the cheaper track
 drifts is more useful than the accurate one that steals CPU. `TRACKER_TYPE` overrides, and
 the fallback order is kcf -> csrt -> mil, so a build with only one tracker still works.
 
-**Matching is label-gated IoU.** A new detection with IoU >= 0.3 against a live track *of the
-same label* keeps that track's identity and tracker; anything else starts a new track.
-Unmatched tracks age out after 5 consecutive misses. Without the label gate, `robot` and
-`person` boxes swap identities whenever they overlap.
+**Matching is label-gated, by overlap or by distance.** A new detection with IoU >= 0.3
+against a live track *of the same label* keeps that track's identity and tracker. Overlap
+alone was not enough: with inference seconds apart, a person walking across the frame moves
+further than their own width between two results, so the next detection did not overlap the
+old box at all - a second tracker started and the first expired next to it, leaving two boxes
+on one object once the person stopped. A detection therefore also matches the nearest
+same-label track whose centre is within 25 % of the frame diagonal (`match_distance`;
+0 disables the rule). Unmatched tracks age out after 5 consecutive misses. Without the label
+gate, `robot` and `person` boxes swap identities whenever they overlap. Two same-label tracks
+that do converge to IoU >= 0.6 are collapsed into the older id, because two boxes on one
+object are worse than one: the operator cannot tell which to trust.
 
 **An empty detection result still seeds.** The pool is re-seeded from every successful
 inference, including one that found nothing. That is how tracks expire when the model stops
 seeing the object; skipping empty results would leave stale boxes drifting forever.
 
 The wire format mirrors `Detection`: normalised geometry plus `track_id`, `age` and `stale`,
-published as `{"type": "tracks"}` on the same WebSocket. The console draws tracks solid and
-the last inference thin and dashed, so the operator can always tell what the model saw from
-what the tracker interpolated. Tracking is an aid, never a measurement: `detection_results`
-holds inference only, and when the two disagree the detection is the answer.
+published as `{"type": "tracks"}` on the same WebSocket. The console draws tracks solid (dashed
+only when a tracker lost its object) and, once tracks exist, does **not** draw the last
+inference at all. Drawing both produced two boxes that never coincided - the inference box is a
+whole inference old, so it contradicts the live frame it is painted over - and the complaint
+was exactly that: "dotted-line frames that often do not coincide with the solid-line frames".
+Without tracks the inference is drawn solid with its confidence, because then it is the only
+answer available.
 
 Failure policy is the same as everywhere else in the pipeline: no tracker installed, a bad
 `TRACKER_TYPE`, or an exception inside a tracker disables the overlay for that frame and
 leaves capture and detection alone. `/status` reports `tracking.enabled`, the chosen tracker
 and the reason it is off.
+
+### 18.1 Why "frames dropped" was the wrong thing to fix
+
+Dropping frames is by design (§12): a bounded in-flight window refuses work the workers cannot
+finish, instead of queueing it into a latency swamp. But with capture at 5 FPS for a live
+preview and inference at ~11 s, *every* frame after the first two was refused - so
+`dropped_capacity` grew steadily and looked like a fault while the pipeline was behaving
+correctly. The number was measuring a cadence mismatch.
+
+`PIPELINE_DISPATCH_INTERVAL_SECONDS` (dev overlay: `10`, base: `0`) makes the decision
+explicit: capture as fast as the preview needs, offer the workers at most one frame per
+interval. Frames kept only for the preview are counted as `shed_sampling`, separately from
+`dropped_capacity`. The rule of thumb is to set the interval near the measured inference time;
+then a rising `dropped_capacity` means the workers really are slower than the chosen sampling,
+and a rising `shed_sampling` is the pipeline doing what it was told.
 

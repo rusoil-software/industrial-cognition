@@ -142,6 +142,15 @@ def resolve_tracker(
     return _constructor(fallback), fallback, reason
 
 
+def _centre_distance(left: Sequence[float], right: Sequence[float]) -> float:
+    """Distance between box centres, in pixels."""
+    lx = left[0] + left[2] / 2.0
+    ly = left[1] + left[3] / 2.0
+    rx = right[0] + right[2] / 2.0
+    ry = right[1] + right[3] / 2.0
+    return float(np.hypot(lx - rx, ly - ry))
+
+
 def _intersection_over_union(left: Sequence[float], right: Sequence[float]) -> float:
     """IoU of two ``(x, y, w, h)`` boxes; 0.0 when they do not overlap."""
     lx, ly, lw, lh = left
@@ -199,6 +208,11 @@ class TrackPool:
         iou_threshold: how much a fresh detection must overlap an existing track to
             be treated as the same object. Lower values keep identity across fast
             motion; higher values avoid two boxes on one object.
+        match_distance: with no overlap at all, a detection whose centre is within this
+            fraction of the frame diagonal from a track's centre is still the same
+            object. Without it, an object that moved further than its own width between
+            two inferences (seconds on CPU) gets a second tracker and ends up with two
+            boxes once it stands still.
         max_missing: frames without a fresh detection before a track is dropped.
         max_tracks: hard cap on simultaneous trackers, by confidence.
     """
@@ -208,6 +222,7 @@ class TrackPool:
         tracker_type: Optional[str] = None,
         *,
         iou_threshold: float = 0.3,
+        match_distance: float = 0.25,
         max_missing: int = 5,
         max_tracks: int = 16,
         min_box_pixels: int = 8,
@@ -221,6 +236,7 @@ class TrackPool:
         else:
             self._factory, self.tracker_name, self.reason = resolve_tracker(tracker_type)
         self.iou_threshold = float(iou_threshold)
+        self.match_distance = float(match_distance)
         self.max_missing = int(max_missing)
         self.max_tracks = int(max_tracks)
         self.min_box_pixels = int(min_box_pixels)
@@ -229,6 +245,7 @@ class TrackPool:
         self._seeded = 0
         self._updated = 0
         self._lost = 0
+        self._merged = 0
         self._lock = threading.Lock()
 
     @property
@@ -274,6 +291,7 @@ class TrackPool:
             self._seeded += 1
             free = list(self._tracks)
             fresh: List[Track] = []
+            gate = self.match_distance * float(np.hypot(width, height))
             for label, confidence, box in candidates:
                 best: Optional[Track] = None
                 best_overlap = 0.0
@@ -283,6 +301,19 @@ class TrackPool:
                     overlap = _intersection_over_union(track.box, box)
                     if overlap >= self.iou_threshold and overlap > best_overlap:
                         best, best_overlap = track, overlap
+                if best is None and gate > 0.0:
+                    # No overlap: the object may simply have moved further than its own
+                    # width between two inferences, which is normal when inference takes
+                    # seconds. Nearest centre within the gate keeps one track instead of
+                    # leaving the old one to expire next to a new one.
+                    nearest = None
+                    nearest_distance = gate
+                    for track in free:
+                        if track.label != label:
+                            continue
+                        distance = _centre_distance(track.box, box)
+                        if distance < nearest_distance:
+                            best, nearest_distance = track, distance
                 if best is not None:
                     free.remove(best)
                     best.confidence = confidence
@@ -343,7 +374,6 @@ class TrackPool:
         if frame is None:
             return []
         height, width = frame.shape[:2]
-        results: List[Dict[str, Any]] = []
         with self._lock:
             alive: List[Track] = []
             for track in self._tracks:
@@ -362,10 +392,40 @@ class TrackPool:
                     self._lost += 1
                     continue
                 alive.append(track)
-                results.append(track.to_payload(width, height))
-            self._tracks = alive
+            self._tracks = self._collapse_duplicates(alive)
+            results = [track.to_payload(width, height) for track in self._tracks]
             self._updated += 1
         return results
+
+    def _collapse_duplicates(self, tracks: List[Track]) -> List[Track]:
+        """Drop a track that follows the same object as an older track.
+
+        Two trackers on one object are worse than a missing box: the operator cannot
+        tell which one to trust. The older id survives, because the console label is the
+        identity an operator has been reading for the last few seconds.
+        """
+        kept: List[Track] = []
+        for track in sorted(tracks, key=lambda item: item.track_id):
+            duplicate = next(
+                (
+                    other
+                    for other in kept
+                    if other.label == track.label
+                    and _intersection_over_union(other.box, track.box) >= 0.6
+                ),
+                None,
+            )
+            if duplicate is None:
+                kept.append(track)
+            else:
+                self._merged += 1
+                logger.debug(
+                    "track %s collapsed into %s: same %s",
+                    track.track_id,
+                    duplicate.track_id,
+                    track.label,
+                )
+        return kept
 
     def snapshot(self) -> Dict[str, Any]:
         """Status for ``/status``: what is following what, and whether it works."""
@@ -379,6 +439,8 @@ class TrackPool:
                 "seeded": self._seeded,
                 "updated": self._updated,
                 "lost": self._lost,
+                "merged": self._merged,
+                "match_distance": round(self.match_distance, 3),
             }
 
     def reset(self) -> None:

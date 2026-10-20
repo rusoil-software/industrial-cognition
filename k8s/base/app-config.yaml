@@ -136,6 +136,12 @@ data:
   # and this runs next to inference. Fallback order is kcf -> csrt -> mil.
   TRACKER_TYPE: "kcf"
   TRACK_FPS: "10"
+  # Offer at most one frame every N seconds to the workers; 0 offers every captured
+  # frame. Set it near the inference time (doc/vision-pipeline.md) so a fast preview does
+  # not fill the in-flight window with frames that are certain to be dropped. Frames kept
+  # only for the preview are counted as ``shed_sampling``, not as over-capacity drops.
+  PIPELINE_DISPATCH_INTERVAL_SECONDS: "0"
+
 
   # -------------------------------------------------------------------- robot
   # Binary Modbus; RS-485 is the authority (doc/conventions.md §3). The TCP

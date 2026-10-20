@@ -26,10 +26,12 @@ analysed frame" - on CPU that is an ~15 s gap. The UI shows the frame number and
 inference/queue timings instead of pretending the two are synchronised, because
 pretending would make a correct system look broken.
 
-**Two kinds of boxes, drawn differently.** Tracked boxes (solid) follow the object between
-inferences; the last inference is drawn thin and dashed. The distinction is deliberate: the
-tracker interpolates, the model decides, and an operator must be able to tell which is which
-at a glance. See `doc/vision-pipeline.md` §18.
+**One box per object.** Tracked boxes (solid) follow the object between inferences; a dashed
+box means the tracker lost the object and is extrapolating. The last inference is drawn only
+when there are no tracks at all: an inference box is a whole inference old (seconds on CPU), so
+painting it over the live frame produced two boxes that never coincided, which read as broken
+tracking. When detection and tracking disagree, the detection is the answer.
+See `doc/vision-pipeline.md` §18.
 
 **Liveness is a number, not an image.** A browser keeps the last MJPEG frame on screen when
 the stream stops, so the console polls `/status` every 2 s and shows the age of the newest

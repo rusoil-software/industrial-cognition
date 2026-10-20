@@ -96,6 +96,10 @@ class RunnerConfig:
     #: A submitted frame that has not returned by now is assumed lost. Must be
     #: comfortably larger than one inference, or healthy slow frames are killed.
     task_timeout_ms: float = 180_000.0
+    #: Minimum seconds between two frames offered to the workers. ``0`` offers every
+    #: captured frame, which is right when inference is faster than capture and wrong
+    #: when it is not; the API reads ``PIPELINE_DISPATCH_INTERVAL_SECONDS``.
+    dispatch_interval_seconds: float = 0.0
 
 
 class PipelineRunner:
@@ -129,6 +133,7 @@ class PipelineRunner:
         self._track_next = 0.0
         self._track_errors = 0
         self._had_tracks = False
+        self._next_dispatch_at = 0.0
         self._stats = PipelineStats(
             camera_id=self._config.capture.camera_id,
             window_seconds=max(1.0, float(self._config.target_fps)),
@@ -259,15 +264,25 @@ class PipelineRunner:
                 # kill the capture thread outright - a non-dict task result did exactly
                 # that, stopping detection silently while the pod stayed "Running".
                 # Degrading one frame is always better than stopping the loop.
-                try:
-                    prompt = self._current_prompt(camera_id)
-                    self._dispatcher.dispatch(frame, prompt=prompt)
-                except Exception:  # noqa: BLE001 - see above
-                    self._loop_errors += 1
-                    logger.exception(
-                        "frame %s could not be dispatched; continuing",
-                        frame.frame_number,
-                    )
+                if not self._dispatch_due():
+                    # Captured for the preview, not offered to the workers: at 5 FPS
+                    # capture with 11 s CPU inference every frame was being refused by
+                    # the window, so the drop counter measured the cadence mismatch
+                    # rather than a failing pipeline. Sampling down to the inference rate
+                    # keeps the preview live and the counters honest: a frame still
+                    # refused *after* sampling is a real capacity shortfall, and stays
+                    # counted as one.
+                    self._stats.record_shed_sampling()
+                else:
+                    try:
+                        prompt = self._current_prompt(camera_id)
+                        self._dispatcher.dispatch(frame, prompt=prompt)
+                    except Exception:  # noqa: BLE001 - see above
+                        self._loop_errors += 1
+                        logger.exception(
+                            "frame %s could not be dispatched; continuing",
+                            frame.frame_number,
+                        )
 
             # Collection is guarded separately and runs even when capture failed, so a
             # result already paid for is never abandoned because of an unrelated error.
@@ -288,6 +303,23 @@ class PipelineRunner:
         logger.info("capture loop stopped for camera %s", camera_id)
 
     # -- prompts -----------------------------------------------------------
+    def _dispatch_due(self, now: Optional[float] = None) -> bool:
+        """Whether this frame should be offered to the workers.
+
+        ``dispatch_interval_seconds`` is how the pipeline is matched to the workers'
+        actual speed: capture may run at 5-25 FPS for the preview while a CPU inference
+        takes ten seconds, so sending every frame only fills the in-flight window and
+        inflates ``dropped_capacity``. Zero keeps the old behaviour (offer every frame).
+        """
+        interval = float(getattr(self._config, "dispatch_interval_seconds", 0.0) or 0.0)
+        if interval <= 0.0:
+            return True
+        moment = time.monotonic() if now is None else now
+        if moment < self._next_dispatch_at:
+            return False
+        self._next_dispatch_at = moment + interval
+        return True
+
     def _current_prompt(self, camera_id: str) -> Optional[Any]:
         """Cached per-camera prompt; ``None`` when unset or unavailable."""
         if self._prompt_provider is None:

@@ -286,11 +286,29 @@ not in the original 13.*
   (`drift_pixels`, `PAN_PERIOD_FRAMES`), so consecutive frames differ visibly while the
   bounded in-flight window keeps shedding the surplus. Inference latency is unchanged; what
   changes is that the preview is 5 FPS and a still image looks like a slow pan.
+* **Follow-up report (same day): dropped frames, duplicate boxes, contradicting boxes.**
+  "Lessen the amount of frames dropped", "reload the page to get tracking results", "two
+  trackers instead of one", "dotted-line frames that do not coincide with the solid ones".
+  - `dropped_capacity` was measuring the cadence mismatch, not a fault: 5 FPS capture against
+    ~11 s CPU inference refuses nearly every frame by design. `PIPELINE_DISPATCH_INTERVAL_SECONDS`
+    (dev `10`, base `0`) now offers workers one frame per interval and counts preview-only
+    frames as `shed_sampling`, so `dropped_capacity` rising again means a real problem.
+  - Duplicate boxes: matching used overlap only, so an object moving further than its own width
+    between two inferences started a second track. Detections now also match the nearest
+    same-label track within 25 % of the frame diagonal (`match_distance`), and two tracks that
+    end up on one object (IoU ≥ 0.6) collapse into the older id (`merged` in `/status`).
+  - Dashed detection boxes were one whole inference old, so they could never agree with the
+    live frame; they are no longer drawn when tracks exist (drawn solid when tracking is off).
+  - "Needs a reload": the console's `app.js` is served from the image and was being cached by the
+    browser. `/ui` responses now carry `Cache-Control: no-cache, must-revalidate`, so a rebuilt
+    console is picked up on the next load instead of a hard reload.
+  Tests: 4 tracking cases (distance gate, disabled gate, collapse, label separation) and 2 runner
+  cases (sampling vs. zero interval) added.
 * **Boxes moved once per inference.** On CPU that is once per ~11 s, so a walking worker's
   box teleported. `src/vision/tracking.py` seeds one OpenCV tracker per detection and
   advances them at `TRACK_FPS` (10) between inferences, publishing
-  `{"type": "tracks"}` on the same WebSocket; the console draws tracks solid and the last
-  inference thin and dashed, so interpolation is never mistaken for a model output. KCF is
+  `{"type": "tracks"}` on the same WebSocket; the console draws tracks as the primary box.
+  KCF is
   the default (CSRT is several times more expensive per update), fallback kcf → csrt → mil,
   and a missing tracker, a bad `TRACKER_TYPE` or a tracker exception disables the overlay
   without touching capture or detection. `api.txt` moved to
@@ -300,9 +318,15 @@ not in the original 13.*
   normalised geometry, `age` and `stale` for `robot` 0.2745 / `robot` 0.2687 / `person` 0.2197.
   Tracking is an aid, not measurement: rows in `detection_results` still come from inference.
 * Tests: 15 new (`tests/pipeline/test_runner_tracking.py`, `tests/api/test_stream_freshness.py`,
-  `tests/vision/test_tracking.py`, 5 lifecycle tests in `tests/camera/test_rtsp_server.py`);
-  suite 513 passed / 13 skipped. Reference: `doc/camera.md` (console, liveness, RTSP keepalive)
+  `tests/vision/test_tracking.py`, 5 lifecycle tests in `tests/camera/test_rtsp_server.py`),
+  plus 4 tracking cases and 3 runner cases for the follow-up; suite 543 passed / 13 skipped.
+  Reference: `doc/camera.md` (console, liveness, RTSP keepalive)
   and `doc/vision-pipeline.md` §18.
+* Verified live after the follow-up (2026-10-20 22:52, dev): `captured 463` in 93 s (5 FPS),
+  `dispatched 6`, `dropped_capacity 1`, `shed_sampling 456`, inference p50 13.0 s, tracking
+  `{tracks: 1, seeded: 4, updated: 463, merged: 0, match_distance: 0.25}` - one box per object,
+  and a drop counter that no longer reports the intended cadence as a fault. `/ui/app.js`
+  answered `cache-control: no-cache, must-revalidate`, so a rebuilt console needs no hard reload.
 
 ### **Stage 3: Polish & Hardening**
 

@@ -131,7 +131,14 @@ async def require_session(request, call_next):
             return JSONResponse(
                 {"detail": "authentication required"}, status_code=401
             )
-    return await call_next(request)
+    response = await call_next(request)
+    if request.url.path.startswith("/ui"):
+        # The console is shipped inside this image. Without this header a rebuilt
+        # image keeps serving the previous app.js out of the browser cache, and the
+        # operator sees yesterday's UI until a hard reload - which reads as "the fix
+        # did nothing".
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return response
 
 # Operator UI. Served by the API for the MVP so there is one deployment and no
 # CORS surface; a separate static host can replace this mount later without the

@@ -264,6 +264,11 @@ def start_pipeline(
             capture=capture,
             target_fps=float(os.getenv("CAMERA_FPS", "60")),
             max_in_flight=int(os.getenv("PIPELINE_MAX_IN_FLIGHT", "64")),
+            # Match the dispatch rate to the workers instead of to the preview: with
+            # 11 s CPU inference, offering every captured frame only fills the window.
+            dispatch_interval_seconds=float(
+                os.getenv("PIPELINE_DISPATCH_INTERVAL_SECONDS", "0") or 0
+            ),
         )
         runner = PipelineRunner(
             build_frame_source(config.capture.source, config.capture),

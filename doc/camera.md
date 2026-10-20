@@ -173,9 +173,20 @@ inference seeds an OpenCV tracker per detection, and the trackers are advanced a
 
 - `src/vision/tracking.py` publishes `{"type": "tracks", ...}` messages that carry the same
   normalised geometry keys as detections plus `track_id`, `age` and `stale`.
-- The console draws tracked boxes solid (dashed when the tracker lost its object) and the
-  last inference as thin dashed boxes, so it stays obvious what the model actually saw and
-  what is interpolation.
+- The console draws tracks solid (dashed only when the tracker lost its object). Once tracks
+  exist it does **not** also draw the last inference: that box is one inference old (seconds
+  on CPU) and painting it over the live frame produced two boxes that never agreed, which
+  looked like a bug in the tracking. Without tracks — no tracker installed, tracking disabled,
+  or nothing detected yet — the last inference is drawn solid with its confidence, because
+  then it is the only thing there is to show.
+- An object that moves further than its own width between two inferences is still the same
+  object: a fresh detection matches an existing track by overlap (IoU >= 0.3) **or** by centre
+  distance (within 25 % of the frame diagonal, `match_distance`). Without the distance rule the
+  old box stayed on screen while a new one appeared next to it, so a fast object ended up with
+  two trackers once it stopped.
+- Two same-label boxes that end up on top of each other (IoU >= 0.6) are collapsed into the
+  older `track_id` (`merged` in `/status`). Two boxes on one object are worse than one, since
+  the operator cannot tell which to trust.
 - The seed frame is the *newest* frame, not the one the detection came from: on CPU the
   detection is seconds old, and seeding a stale frame would put every box in the wrong place.
 - Tracker choice is `TRACKER_TYPE` (`kcf` by default, then `csrt`, then `mil`). KCF is the

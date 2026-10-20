@@ -176,7 +176,8 @@ def build_runner(**overrides):
         capture=CaptureConfig(camera_id="cam0", encode_max_side=64, jpeg_quality=60),
         target_fps=overrides.pop("target_fps", 90),
         prompt_refresh_seconds=overrides.pop("prompt_refresh_seconds", 0.05),
-        max_in_flight=32,
+        dispatch_interval_seconds=overrides.pop("dispatch_interval_seconds", 0.0),
+        max_in_flight=overrides.pop("max_in_flight", 32),
     )
     runner = PipelineRunner(
         overrides.pop("source", FrameSourceStub()),
@@ -298,3 +299,83 @@ def test_runner_loop_is_a_daemon_thread() -> None:
         )
     finally:
         runner.stop()
+
+
+def test_a_dispatch_interval_samples_frames_instead_of_dropping_them() -> None:
+    """Capture must stay fast for the preview while workers see one frame at a time.
+
+    Five frames in a row within a one-second interval are captured (so the console is
+    live) but only the first is offered to the workers; the rest are counted as
+    deliberate sampling, which is a different fact from the in-flight window refusing
+    them.
+    """
+    runner, _ = build_runner(dispatch_interval_seconds=60.0)
+    runner.start()
+    try:
+        time.sleep(0.4)
+    finally:
+        runner.stop()
+
+    counters = runner.snapshot()["pipeline"]["counters"]
+    assert counters["captured"] >= 2
+    assert counters["dispatched"] == 1
+    assert counters["shed_sampling"] >= 1
+    assert counters["dropped_capacity"] == 0
+
+
+def test_zero_dispatch_interval_offers_every_frame() -> None:
+    runner, _ = build_runner(dispatch_interval_seconds=0.0)
+    runner.start()
+    try:
+        time.sleep(0.4)
+    finally:
+        runner.stop()
+
+    counters = runner.snapshot()["pipeline"]["counters"]
+    assert counters["dispatched"] >= 2
+    assert counters["shed_sampling"] == 0
+
+
+def test_sampling_keeps_capacity_drops_truthful() -> None:
+    """A frame refused *after* sampling is a real shortfall, not "sampling".
+
+    The two counters answer different questions: ``shed_sampling`` is "this frame was
+    never meant for the workers", ``dropped_capacity`` is "the workers could not take what
+    they were offered". Sampling must not quietly excuse the second - a pipeline that is
+    genuinely too slow has to keep looking too slow.
+    """
+
+    class StuckHandle:
+        task_id = "stuck"
+
+        def ready(self) -> bool:  # never finishes: the window stays full
+            return False
+
+        def result(self):
+            return {}
+
+    class StuckTransport:
+        def submit(self, payload):
+            return StuckHandle()
+
+        def collect(self):
+            return []
+
+    config = RunnerConfig(
+        capture=CaptureConfig(camera_id="cam0", encode_max_side=64, jpeg_quality=60),
+        target_fps=90,
+        dispatch_interval_seconds=0.01,
+        max_in_flight=1,
+    )
+    runner = PipelineRunner(FrameSourceStub(), StuckTransport(), config)
+    runner.start()
+    try:
+        time.sleep(0.4)
+    finally:
+        runner.stop()
+
+    counters = runner.snapshot()["pipeline"]["counters"]
+    assert counters["dispatched"] == 1
+    assert counters["dropped_capacity"] >= 1
+
+

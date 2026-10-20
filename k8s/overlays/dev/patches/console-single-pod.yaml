@@ -34,3 +34,11 @@ spec:
               value: "5"
             - name: PIPELINE_MAX_IN_FLIGHT
               value: "2"
+            # CPU inference here is ~14 s/frame (measured p50 13.7 s), so offering every
+            # captured frame only fills the window: ``dropped_capacity`` grew while nothing
+            # was wrong. Sample instead - the interval sits just above the measured inference
+            # time, so a worker always has one frame in flight, the preview keeps its 5 FPS,
+            # and a rising ``dropped_capacity`` means a real problem again. Remove this once
+            # inference is faster than the capture cadence.
+            - name: PIPELINE_DISPATCH_INTERVAL_SECONDS
+              value: "15"
