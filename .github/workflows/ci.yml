@@ -187,6 +187,13 @@ jobs:
       - name: Deploy
         run: |
           kubectl apply -k k8s/overlays/dev
+          # The ONNX artifact is not in the repository (tests/vision/test_detection_quality.py is
+          # model-marked for that reason), so the workers here would crash-loop on a missing model
+          # while holding a 2 GiB request each - more than a hosted runner has to spare next to
+          # postgres, rabbitmq, redis, minio and the API. Inference is not what this job tests: it
+          # tests the deployment surface (auth, readiness, streams). Scale the workers out and say
+          # so, rather than letting them fail noisily and calling it a pass.
+          kubectl -n cogni-ns scale deploy/vision --replicas=0
           kubectl -n cogni-ns wait --for=condition=ready pod/postgres-0 --timeout=300s
           kubectl -n cogni-ns rollout status deploy/api --timeout=420s
 
@@ -196,6 +203,10 @@ jobs:
           kubectl -n cogni-ns create job alembic-migrate \
             --image=industrial-cognition/api:dev \
             --dry-run=client -o yaml > /tmp/migrate.yaml
+          # `kubectl create job` produces a Pod with no securityContext, and the namespace warns on
+          # restricted policy (enforces baseline). Every other workload here is restricted-compliant,
+          # so the one-off job should be too - otherwise it is rejected outright on a cluster that
+          # enforces restricted, which is the production configuration.
           python - <<'PY'
           import yaml
           job = yaml.safe_load(open("/tmp/migrate.yaml"))
@@ -207,20 +218,48 @@ jobs:
               {"configMapRef": {"name": "industrial-cognition-config"}},
               {"secretRef": {"name": "industrial-cognition-secrets"}},
           ]
+          container["securityContext"] = {
+              "allowPrivilegeEscalation": False,
+              "readOnlyRootFilesystem": True,
+              "runAsNonRoot": True,
+              "runAsUser": 1000,
+              "capabilities": {"drop": ["ALL"]},
+          }
+          container["volumeMounts"] = [{"name": "tmp", "mountPath": "/tmp"}]
+          spec["securityContext"] = {
+              "runAsNonRoot": True,
+              "runAsUser": 1000,
+              "fsGroup": 1000,
+              "seccompProfile": {"type": "RuntimeDefault"},
+          }
+          spec["volumes"] = [{"name": "tmp", "emptyDir": {}}]
+          # One retry covers a transient connection race; a migration that is genuinely broken must
+          # fail visibly instead of looping six times against a lock.
+          job["spec"]["backoffLimit"] = 1
           yaml.safe_dump(job, open("/tmp/migrate.yaml", "w"))
           PY
           kubectl apply -f /tmp/migrate.yaml
           kubectl -n cogni-ns wait --for=condition=complete job/alembic-migrate --timeout=300s
 
+      - name: Readiness endpoint
+        # /readyz is the honest probe added for backlog item 5. Checked explicitly because a
+        # regression there is invisible: the cluster would simply stop sending traffic.
+        run: |
+          kubectl -n cogni-ns exec deploy/api -- python -c \
+            "import httpx, json; r = httpx.get('http://localhost:8000/readyz'); print(r.status_code, r.text); assert r.status_code == 200"
+
       - name: Auth, streams and readiness
         run: |
-          kubectl -n cogni-ns cp scripts/smoke_auth.py deploy/api:/tmp/smoke_auth.py
-          kubectl -n cogni-ns exec deploy/api -- env PYTHONPATH=/app python /tmp/smoke_auth.py
+          # Streamed over stdin instead of `kubectl cp`: no dependency on tar inside the image or
+          # on a writable path (the container runs with a read-only root filesystem and only /tmp
+          # is an emptyDir). The script is standalone - it imports nothing from the repository.
+          kubectl -n cogni-ns exec -i deploy/api -- python - < scripts/smoke_auth.py
 
       - name: Diagnostics on failure
         if: failure()
         run: |
-          kubectl -n cogni-ns get pods
+          kubectl -n cogni-ns get pods -o wide
+          kubectl -n cogni-ns get events --sort-by=.lastTimestamp | tail -40
           kubectl -n cogni-ns describe pods || true
           kubectl -n cogni-ns logs deploy/api --tail=200 || true
-          kubectl -n cogni-ns logs deploy/vision --tail=200 || true
+          kubectl -n cogni-ns logs job/alembic-migrate --tail=100 || true

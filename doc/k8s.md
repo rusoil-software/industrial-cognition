@@ -747,9 +747,29 @@ security context (`runAsNonRoot`, read-only root, `/tmp` emptyDir).
   `kubeconform -strict`, then runs the manifest contract tests.
 
 A third job, **cluster**, is manual (`workflow_dispatch`): it builds both images, starts kind,
-deploys, migrates through a Job and runs `scripts/smoke_auth.py` against the real surface. It is
-gated because it takes minutes, not seconds - but it is the only job that would have caught the
-auth, readiness and stream bugs found by hand.
+deploys, migrates through a Job, checks `/readyz` and runs `scripts/smoke_auth.py` against the real
+surface. It is gated because it takes minutes, not seconds - but it is the only job that exercises
+the deployment instead of the code.
+
+Three things it deliberately does differently from the installer, each for a reason:
+
+* **The vision workers are scaled to zero after `kubectl apply`.** The ONNX artifact is not in the
+  repository, so the workers would crash-loop on a missing model while holding a 2 GiB request
+  each - more than a hosted runner has to spare alongside postgres, rabbitmq, redis, minio and the
+  API. Inference is covered by the `model`-marked tests, not by this job. Letting the pods fail and
+  still calling the run green would be worse than saying what is tested.
+* **The migrate Job is patched to a restricted security context.** `kubectl create job` emits a Pod
+  with none, and the namespace only *warns* on restricted policy, so an uncompliant Job passes here
+  and is rejected on a cluster that enforces it - which is the production configuration. The step
+  also sets `backoffLimit: 1`: one retry for a transient connection race, rather than six passes at
+  a migration that is genuinely broken.
+* **`scripts/smoke_auth.py` is streamed over stdin**, not copied in. `kubectl cp` would work today
+  (the container has `tar`, and `/tmp` is an emptyDir) but it depends on both of those; stdin
+  depends on neither, and the script is standalone.
+
+The kind cluster also differs from minikube in image loading (`kind load docker-image` versus
+`minikube image load`), which is the one part of this job that cannot be rehearsed on a workstation
+with minikube.
 
 ---
 
