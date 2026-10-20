@@ -26,17 +26,32 @@ analysed frame" - on CPU that is an ~15 s gap. The UI shows the frame number and
 inference/queue timings instead of pretending the two are synchronised, because
 pretending would make a correct system look broken.
 
+**Two kinds of boxes, drawn differently.** Tracked boxes (solid) follow the object between
+inferences; the last inference is drawn thin and dashed. The distinction is deliberate: the
+tracker interpolates, the model decides, and an operator must be able to tell which is which
+at a glance. See `doc/vision-pipeline.md` §18.
+
+**Liveness is a number, not an image.** A browser keeps the last MJPEG frame on screen when
+the stream stops, so the console polls `/status` every 2 s and shows the age of the newest
+captured frame in a badge (`live · 0.4s`, `stale · 12.1s`, `camera offline`,
+`waiting for a frame`, `capturing another camera`). The staleness budget comes from the API
+(`latest_frame.stale_after_seconds` = three capture intervals, at least 5 s), so a slow dev
+replay is not misreported as dead. The stream itself ends after `STREAM_IDLE_TIMEOUT` (15 s)
+of silence, which is what makes the browser raise `onerror` and the console retry.
+
 ## Endpoints
 
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /ui/` | the console (static mount) |
-| `GET /cameras` | cameras, whether each is capturing, and its queries |
+| `GET /cameras` | cameras, whether each is capturing, its queries, frame age and `streaming` |
 | `GET /cameras/{id}/snapshot` | the last JPEG the inference actually saw |
-| `GET /cameras/{id}/stream` | MJPEG preview, 5 FPS |
+| `GET /cameras/{id}/stream` | MJPEG preview, `STREAM_FPS` (10), closes when capture stops |
 | `GET /cameras/{id}/stats` | pipeline, throughput and fan-out snapshot |
-| `WS /ws/detections` | results as they complete |
+| `GET /status` | pipeline + registry + tracking state (drives the live badge) |
+| `WS /ws/detections` | results as they complete, plus `{"type": "tracks"}` between them |
 | `PUT/GET/DELETE /cameras/{id}/prompt` | the cognition task |
+| `DELETE /cameras/{id}` | remove a registered camera (keeps its task) |
 
 ## Running it without a camera
 
@@ -94,9 +109,17 @@ Against the live cluster, on the real photograph: console assets served (Vue 158
 and `/ws/detections` delivered **5 detections for one frame** - `{cardboard box: 2,
 robot: 2, person: 1}` - with `queue_ms` 7 and `e2e` 15 s on CPU.
 
+Freshness and tracking, verified 2026-10-20 in minikube against the RTSP test publisher:
+`/status` reported `latest_frame {frame_number: 22, age_seconds: 0.53,
+stale_after_seconds: 5.0}` and `tracking {enabled: true, tracker: "kcf", tracks: 4,
+seeded: 7, updated: 23, lost: 0}`, and a WebSocket listener saw 6 `tracks` messages in
+30 s with `track_id`, `object_type`, normalised geometry, `age` and `stale` for
+`robot 0.2745`, `robot 0.2687` and `person 0.2197`. The publisher, which used to drop a
+client at 30 s, kept one for 75 s and 711 frames.
+
 ## Not built yet
 
-No authentication or authorisation on the console or the prompt endpoints (the deployment
-has no auth story yet - this is the first thing to add before it faces a network). No
-multi-camera view (one camera per page). No historical playback or result persistence in
-the UI. No zone/area constraints per query - deliberately deferred.
+No multi-camera view (one camera per page; the registry lists many, the stage shows one).
+No historical playback or result persistence in the UI. No zone/area constraints per query -
+deliberately deferred. No server-side overlay rendering (boxes are drawn in the browser, so a
+second viewer costs one MJPEG stream each).

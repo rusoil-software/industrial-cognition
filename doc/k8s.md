@@ -195,6 +195,8 @@ block is the service-endpoint contract that the application modules are wired to
 | `CAMERA_IP` / `CAMERA_PORT` / `DEFAULT_FPS` | `192.168.1.10` / `554` / `30` | camera |
 | `RTSP_TRANSPORT` | `tcp` (or `udp`) | `src/camera/capture.py` |
 | `CAMERA_REGISTRY_WATCH` | `1` | capture pod (`src/api/runtime.py`) |
+| `STREAM_FPS` / `STREAM_IDLE_TIMEOUT` | `10` / `15` | `src/api/stream.py` (preview) |
+| `TRACKING_ENABLED` / `TRACKER_TYPE` / `TRACK_FPS` | `1` / `kcf` / `10` | `src/vision/tracking.py` |
 | `PERSIST_DETECTIONS` / `PERSIST_ONLY_DETECTIONS` | `1` / `1` | `src/api/detection_sink.py` |
 | `PERSIST_MIN_INTERVAL_SECONDS` | `1.0` | `src/api/detection_sink.py` |
 | `DETECTION_RETENTION_DAYS` | `30` | retention CronJob |

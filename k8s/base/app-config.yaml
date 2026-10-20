@@ -122,6 +122,21 @@ data:
   # pod over UDP. Set to udp for the lower-jitter path on a clean LAN.
   RTSP_TRANSPORT: "tcp"
 
+  # --------------------------------------------------------------- live view
+  # Preview frames per second for the console. A CPU-only worker produces frames far
+  # slower than this, so the number only caps how fast a healthy stream is re-sent.
+  STREAM_FPS: "10"
+  # Close an MJPEG response that has had no new frame for this long. A browser keeps the
+  # last image on screen, so a silently frozen preview is worse than a broken one.
+  STREAM_IDLE_TIMEOUT: "15"
+  # Box trackers keep boxes on moving objects between the (slow) inferences. Tracking is
+  # an operator aid: turning it off costs nothing in detection quality.
+  TRACKING_ENABLED: "1"
+  # kcf by default: csrt is more accurate per update but several times more expensive,
+  # and this runs next to inference. Fallback order is kcf -> csrt -> mil.
+  TRACKER_TYPE: "kcf"
+  TRACK_FPS: "10"
+
   # -------------------------------------------------------------------- robot
   # Binary Modbus; RS-485 is the authority (doc/conventions.md §3). The TCP
   # fallback is used when MODBUS_HOST is set.

@@ -293,12 +293,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         try:
             while not stop.wait(10.0):
                 stats = server.snapshot()
+                # The frame age matters as much as the client count: a publisher whose
+                # camera stalled still reports clients but sends nothing new, and that
+                # is what a viewer sees as "connected but frozen".
+                age = stats.get("frame_age_seconds")
+                age_text = "no frame yet" if age is None else f"last frame {age:.1f}s ago"
                 LOGGER.info(
-                    "serving %s - %s client(s), %s frame(s) sent",
+                    "serving %s - %s client(s), %s frame(s) sent, %s dropped, %s",
                     stats["url"].rsplit("/", 1)[-1],
                     stats["clients"],
                     stats["frames_sent"],
+                    stats.get("frames_dropped", 0),
+                    age_text,
                 )
+                for client in stats.get("sessions", []):
+                    if client.get("playing"):
+                        LOGGER.info(
+                            "  client %s (%s) - %s frame(s), %s dropped%s",
+                            client.get("address"),
+                            client.get("protocol"),
+                            client.get("frames_sent", 0),
+                            client.get("frames_dropped", 0),
+                            f", error: {client['error']}" if client.get("error") else "",
+                        )
         except KeyboardInterrupt:
             print("\nStopping.")
         finally:

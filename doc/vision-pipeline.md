@@ -631,3 +631,50 @@ Readiness is separate from liveness (§5 of the backlog): `/health` stays 200 wh
 process is alive, `/readyz` decides whether traffic should arrive, parameterised by the pod's
 role through `READY_REQUIRE_PIPELINE`. A camera pod without capture leaves the endpoints; the
 API stays, because it serves the page that explains the fault.
+
+## 18. Boxes that move between inferences
+
+The console draws detections, and detections arrive once per inference. Measured on this
+host: 8.5-11 s per frame at two threads (§13), so a worker walking past a camera produced a
+box that jumped once every ten seconds and otherwise sat still. That is not a rendering
+problem, it is the honest output rate of the detector - which is why the fix is not a faster
+preview but a cheaper estimator between the expensive ones.
+
+`src/vision/tracking.py` seeds one OpenCV tracker per detection from a result, then advances
+them at `TRACK_FPS` (10) on the newest frames. The capture process owns the pool: a tracker
+needs pixel data and the frames are already there, and shipping frames to a worker to draw
+boxes would cost more than the tracking.
+
+Four decisions are worth recording.
+
+**Seed on the newest frame, not on the detection's frame.** On CPU the detection is several
+seconds old when it arrives. Seeding its own frame would place every box where the object was
+when the frame was captured - correct geometry, wrong time, and visibly lagging. The tracker
+starts where the object is *now*, which trades a little box error for a box that is on the
+object.
+
+**KCF by default, CSRT on request.** CSRT survives occlusion better and costs several times
+more per update. At 10 updates/s next to a 2-thread inference, the cheaper tracker that
+drifts is more useful than the accurate one that steals CPU. `TRACKER_TYPE` overrides, and
+the fallback order is kcf -> csrt -> mil, so a build with only one tracker still works.
+
+**Matching is label-gated IoU.** A new detection with IoU >= 0.3 against a live track *of the
+same label* keeps that track's identity and tracker; anything else starts a new track.
+Unmatched tracks age out after 5 consecutive misses. Without the label gate, `robot` and
+`person` boxes swap identities whenever they overlap.
+
+**An empty detection result still seeds.** The pool is re-seeded from every successful
+inference, including one that found nothing. That is how tracks expire when the model stops
+seeing the object; skipping empty results would leave stale boxes drifting forever.
+
+The wire format mirrors `Detection`: normalised geometry plus `track_id`, `age` and `stale`,
+published as `{"type": "tracks"}` on the same WebSocket. The console draws tracks solid and
+the last inference thin and dashed, so the operator can always tell what the model saw from
+what the tracker interpolated. Tracking is an aid, never a measurement: `detection_results`
+holds inference only, and when the two disagree the detection is the answer.
+
+Failure policy is the same as everywhere else in the pipeline: no tracker installed, a bad
+`TRACKER_TYPE`, or an exception inside a tracker disables the overlay for that frame and
+leaves capture and detection alone. `/status` reports `tracking.enabled`, the chosen tracker
+and the reason it is off.
+

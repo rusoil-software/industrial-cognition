@@ -211,6 +211,30 @@ def _prompt_provider(camera_id: str):
         session.close()
 
 
+def _build_tracker():
+    """The box tracker, or ``None`` when disabled or unavailable.
+
+    Tracking is a console aid: it keeps boxes on moving objects between inferences.
+    It is deliberately non-fatal - a build without opencv-contrib, or a bad
+    ``TRACKER_TYPE``, yields ``None`` and the overlay falls back to inference boxes.
+    """
+    if os.getenv("TRACKING_ENABLED", "1").strip().lower() in ("0", "false", "no"):
+        logger.info("box tracking disabled by TRACKING_ENABLED=0")
+        return None
+    try:
+        from src.vision.tracking import TrackPool
+
+        pool = TrackPool(os.getenv("TRACKER_TYPE") or None)
+    except Exception:  # noqa: BLE001 - the overlay must never block capture
+        logger.exception("box tracking is unavailable; continuing without it")
+        return None
+    if pool.enabled:
+        logger.info("tracking boxes with %s", pool.tracker_name)
+    elif pool.reason:
+        logger.warning("box tracking is disabled: %s", pool.reason)
+    return pool
+
+
 def start_pipeline(
     source: Optional[str] = None, camera_id: Optional[str] = None
 ) -> bool:
@@ -247,6 +271,8 @@ def start_pipeline(
             config,
             prompt_provider=_prompt_provider,
             sink=_build_sink(),
+            tracker=_build_tracker(),
+            track_fps=float(os.getenv("TRACK_FPS", "10")),
         )
         if not runner.start():
             _START_ERROR = "capture source could not be opened"

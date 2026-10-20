@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from typing import Optional
 
@@ -53,9 +54,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Cameras"])
 
 #: Preview pacing. The capture loop may run at 60 FPS; pushing 60 JPEGs per second into
-#: a browser tab would waste bandwidth and GPU-less CPU for no visual benefit.
-STREAM_FPS = 5
+#: a browser tab would waste bandwidth and GPU-less CPU for no visual benefit. Ten is
+#: still visibly smooth for an operator watching a conveyor, and a fifth of the bandwidth
+#: of the capture rate. STREAM_FPS overrides it (1-30).
+STREAM_FPS = max(1, min(30, int(os.getenv("STREAM_FPS", "10") or 10)))
 BOUNDARY = "frame"
+#: How long a preview may go without a new frame before the stream closes. A silently
+#: frozen image is the worst outcome - it looks live. Ending the response makes the
+#: browser fire `onerror`, and the console retries while showing "no live frames".
+STREAM_IDLE_TIMEOUT = max(2.0, float(os.getenv("STREAM_IDLE_TIMEOUT", "15") or 15))
 
 
 @router.get("/cameras", summary="Cameras, their configured queries and their state")
@@ -106,6 +113,11 @@ def list_cameras(session: Session = Depends(get_db)) -> dict:
         entry["capture_fps"] = (
             runner.stats.snapshot()["rates"]["capture_fps"] if running else 0.0
         )
+        # Freshness per camera: the console shows a stale badge instead of an old frame
+        # that looks live. Zero/None means "no frame yet", not "healthy".
+        latest = runner.snapshot().get("latest_frame") if running else None
+        entry["last_frame_age_seconds"] = latest["age_seconds"] if latest else None
+        entry["streaming"] = bool(running and latest is not None)
         cameras.append(entry)
     return {"cameras": cameras, "count": len(cameras)}
 
@@ -157,17 +169,29 @@ async def stream(camera_id: str) -> StreamingResponse:
 
     async def frames():
         last_number = -1
+        last_sent_at = time.monotonic()
         interval = 1.0 / STREAM_FPS
         while True:
             runner = runtime.get_runner()
             frame = runner.latest_frame() if runner is not None else None
             if frame is not None and frame.frame_number != last_number:
                 last_number = frame.frame_number
+                last_sent_at = time.monotonic()
                 yield (
                     f"--{BOUNDARY}\r\nContent-Type: image/jpeg\r\n"
                     f"Content-Length: {len(frame.jpeg)}\r\n"
                     f"X-Frame-Number: {frame.frame_number}\r\n\r\n"
                 ).encode("ascii") + frame.jpeg + b"\r\n"
+            elif time.monotonic() - last_sent_at > STREAM_IDLE_TIMEOUT:
+                # Capture stopped (camera unplugged, pod restarting, source error). Close
+                # the response so the browser shows the failure instead of the last frame
+                # forever; the console reopens it and keeps the stale badge honest.
+                logger.info(
+                    "closing the preview for camera %s: no new frame for %.0fs",
+                    camera_id,
+                    STREAM_IDLE_TIMEOUT,
+                )
+                return
             await asyncio.sleep(interval)
 
     return StreamingResponse(

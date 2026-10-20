@@ -314,6 +314,59 @@ def candidate_addresses() -> List[str]:
     return found
 
 
+def _enable_keepalive(sock: socket.socket) -> None:
+    """Ask TCP to notice a dead peer.
+
+    Without it a camera that loses power leaves a half-open connection that only a
+    write failure (after minutes of retransmission) reveals. Best effort: Windows
+    exposes SO_KEEPALIVE but not the tuning knobs.
+    """
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        for name, value in (("TCP_KEEPIDLE", 30), ("TCP_KEEPINTVL", 10), ("TCP_KEEPCNT", 3)):
+            option = getattr(socket, name, None)
+            if option is not None:
+                sock.setsockopt(socket.IPPROTO_TCP, option, value)
+    except OSError:  # pragma: no cover - platform dependent, never fatal
+        pass
+
+
+@dataclass
+class _Peer:
+    """One client TCP connection, with the lock its writers share.
+
+    RTSP replies and interleaved RTP packets travel over the same socket and are
+    written from two threads (the request handler and the per-session sender). Two
+    concurrent ``sendall`` calls would interleave and corrupt the framing, so every
+    write takes this lock.
+    """
+
+    sock: socket.socket
+    address: Tuple[str, int]
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    closed: bool = False
+
+    def send(self, data: bytes) -> None:
+        with self.lock:
+            if self.closed:
+                raise OSError("the client connection is closed")
+            self.sock.sendall(data)
+
+    def shutdown(self) -> None:
+        """Wake a thread blocked in ``recv`` so it can observe the stop flag."""
+        try:
+            self.sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+    def close(self) -> None:
+        self.closed = True
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
+
 @dataclass
 class RtpSession:
     """One client that has asked to play the stream."""
@@ -321,12 +374,23 @@ class RtpSession:
     session_id: str
     protocol: str
     client_rtp_port: Optional[int] = None
-    connection: Optional[socket.socket] = None
+    connection: Optional[_Peer] = None
     interleaved: Optional[int] = None
     socket: Optional[socket.socket] = None
     ssrc: int = field(default_factory=lambda: random.randrange(1 << 32))
     playing: bool = False
     address: Optional[Tuple[str, int]] = None
+    #: Per-session RTP sequence: a receiver tolerates gaps but not repeats.
+    sequence: int = field(default_factory=lambda: random.randrange(1 << 16))
+    #: Newest frame waiting for this client's socket, ``(rtp timestamp, payloads)``.
+    #: A single slot, not a queue: a client that cannot keep up should skip frames,
+    #: never build a backlog of stale ones.
+    pending: Optional[Tuple[int, List[bytes]]] = None
+    wake: threading.Condition = field(default_factory=threading.Condition)
+    frames_sent: int = 0
+    frames_dropped: int = 0
+    error: str = ""
+    closed: bool = False
 
     def close(self) -> None:
         if self.socket is not None:
@@ -370,10 +434,11 @@ class MjpegRtspServer:
         self._stop = threading.Event()
         self._listener: Optional[socket.socket] = None
         self._threads: List[threading.Thread] = []
-        self._sequence = random.randrange(1 << 16)
         self._timestamp = random.randrange(1 << 31)
         self._clients_served = 0
         self._frames_sent = 0
+        self._frames_dropped = 0
+        self._last_frame_at: Optional[float] = None
 
     # -- lifecycle --------------------------------------------------------- #
 
@@ -399,6 +464,15 @@ class MjpegRtspServer:
             sessions = list(self._sessions.values())
             self._sessions.clear()
         for session in sessions:
+            # Shut the control socket down before closing it: the client thread is
+            # blocked in recv() on a connection that is idle by design, and a close
+            # alone does not wake it on every platform.
+            if session.connection is not None:
+                session.connection.shutdown()
+            with session.wake:
+                session.closed = True
+                session.pending = None
+                session.wake.notify_all()
             session.close()
         if self._listener is not None:
             try:
@@ -411,19 +485,40 @@ class MjpegRtspServer:
 
     def snapshot(self) -> dict:
         with self._lock:
-            playing = sum(1 for session in self._sessions.values() if session.playing)
+            sessions = list(self._sessions.values())
+        playing = [session for session in sessions if session.playing]
+        age = (
+            time.monotonic() - self._last_frame_at
+            if self._last_frame_at is not None
+            else None
+        )
         return {
             "url": self.url,
             "port": self._port,
-            "clients": playing,
+            "clients": len(playing),
             "frames_sent": self._frames_sent,
+            "frames_dropped": self._frames_dropped,
             "fps": self._fps,
+            "frame_age_seconds": age,
+            "sessions": [
+                {
+                    "id": session.session_id,
+                    "protocol": session.protocol,
+                    "address": session.address[0] if session.address else None,
+                    "playing": session.playing,
+                    "frames_sent": session.frames_sent,
+                    "frames_dropped": session.frames_dropped,
+                    "error": session.error or None,
+                }
+                for session in sessions
+            ],
         }
 
-    def _spawn(self, target, name: str, *args) -> None:  # noqa: ANN001
+    def _spawn(self, target, name: str, *args):  # noqa: ANN001
         thread = threading.Thread(target=target, name=name, args=args, daemon=True)
         thread.start()
         self._threads.append(thread)
+        return thread
 
     # -- protocol ---------------------------------------------------------- #
 
@@ -439,14 +534,21 @@ class MjpegRtspServer:
             except OSError:
                 return
             logger.info("RTSP client connected from %s", address[0])
-            connection.settimeout(30.0)
-            self._spawn(self._serve_client, f"rtsp-client-{address[0]}", connection, address)
+            # No read timeout on purpose. An RTSP control connection is idle between
+            # requests by design (the client sends at most a keepalive every minute),
+            # and a timed-out recv used to tear down a healthy session after 30 s -
+            # the camera kept publishing while the server counted zero clients.
+            connection.settimeout(None)
+            _enable_keepalive(connection)
+            peer = _Peer(sock=connection, address=address)
+            self._spawn(self._serve_client, f"rtsp-client-{address[0]}", peer)
 
-    def _serve_client(self, connection: socket.socket, address: Tuple[str, int]) -> None:
+    def _serve_client(self, peer: _Peer) -> None:
         try:
             while not self._stop.is_set():
-                request = self._read_request(connection)
+                request = self._read_request(peer.sock)
                 if request is None:
+                    logger.info("RTSP client %s closed the connection", peer.address[0])
                     return
                 method, url, headers = request
                 session_header = headers.get("session", "").split(";")[0].strip()
@@ -454,7 +556,7 @@ class MjpegRtspServer:
 
                 if method == "OPTIONS":
                     self._respond(
-                        connection,
+                        peer,
                         headers,
                         200,
                         "OK",
@@ -467,7 +569,7 @@ class MjpegRtspServer:
                 elif method == "DESCRIBE":
                     body = build_sdp(self._advertised_host(), self._fps)
                     self._respond(
-                        connection,
+                        peer,
                         headers,
                         200,
                         "OK",
@@ -479,24 +581,27 @@ class MjpegRtspServer:
                         body,
                     )
                 elif method == "SETUP":
-                    session = self._setup(connection, address, headers)
+                    session = self._setup(peer, headers)
                     if session is None:
-                        self._respond(connection, headers, 461, "Unsupported Transport", {})
+                        self._respond(peer, headers, 461, "Unsupported Transport", {})
                     else:
                         self._respond(
-                            connection,
+                            peer,
                             headers,
                             200,
                             "OK",
-                            {"Session": session.session_id, "Transport": self._transport_reply(session)},
+                            {
+                                "Session": session.session_id,
+                                "Transport": self._transport_reply(session),
+                            },
                         )
                 elif method == "PLAY":
                     if session is None:
-                        self._respond(connection, headers, 454, "Session Not Found", {})
+                        self._respond(peer, headers, 454, "Session Not Found", {})
                     else:
                         session.playing = True
                         self._respond(
-                            connection,
+                            peer,
                             headers,
                             200,
                             "OK",
@@ -504,31 +609,37 @@ class MjpegRtspServer:
                                 "Session": session.session_id,
                                 "Range": "npt=0.000-",
                                 "RTP-Info": (
-                                    f"url={url}/trackID=0;seq={self._sequence & 0xFFFF};"
+                                    f"url={url}/trackID=0;seq={session.sequence & 0xFFFF};"
                                     f"rtptime={self._timestamp & 0xFFFFFFFF}"
                                 ),
                             },
                         )
                 elif method == "TEARDOWN":
                     if session is not None:
+                        logger.info("RTSP session %s torn down by the client", session.session_id)
                         self._drop(session.session_id)
-                    self._respond(connection, headers, 200, "OK", {})
+                    self._respond(peer, headers, 200, "OK", {})
                 elif method == "GET_PARAMETER":
-                    self._respond(connection, headers, 200, "OK", {})
+                    # This is the keepalive most clients use; answering it is the whole
+                    # point. The session must stay alive while it waits.
+                    self._respond(peer, headers, 200, "OK", {})
                 else:
-                    self._respond(connection, headers, 501, "Not Implemented", {})
+                    self._respond(peer, headers, 501, "Not Implemented", {})
         except (OSError, ValueError) as exc:
-            logger.debug("RTSP client %s dropped: %s", address[0], exc)
+            logger.info("RTSP client %s dropped: %s", peer.address[0], exc)
         finally:
             with self._lock:
-                stale = [key for key, item in self._sessions.items() if item.connection is connection]
+                stale = [
+                    key for key, item in self._sessions.items() if item.connection is peer
+                ]
                 sessions = [self._sessions.pop(key) for key in stale]
             for session in sessions:
+                with session.wake:
+                    session.closed = True
+                    session.pending = None
+                    session.wake.notify_all()
                 session.close()
-            try:
-                connection.close()
-            except OSError:
-                pass
+            peer.close()
 
     def _read_request(
         self, connection: socket.socket
@@ -557,15 +668,14 @@ class MjpegRtspServer:
             rest += connection.recv(4096)
         return method.upper(), url, headers
 
-    def _setup(
-        self, connection: socket.socket, address: Tuple[str, int], headers: Dict[str, str]
-    ) -> Optional[RtpSession]:
+    def _setup(self, peer: _Peer, headers: Dict[str, str]) -> Optional[RtpSession]:
+        address = peer.address
         transport = parse_transport(headers.get("transport", ""))
         session_id = f"{random.randrange(1 << 32):08X}"
         session = RtpSession(
             session_id=session_id,
             protocol=str(transport["protocol"]),
-            connection=connection,
+            connection=peer,
             address=address,
         )
         if session.protocol == "tcp":
@@ -585,6 +695,11 @@ class MjpegRtspServer:
         with self._lock:
             self._sessions[session_id] = session
             self._clients_served += 1
+        # One sender per client: a client whose socket is not draining must not
+        # delay the shared send loop, the other clients, or its own keepalives.
+        session.writer = self._spawn(
+            self._write_frames, f"rtsp-send-{session_id}", session
+        )
         logger.info(
             "RTSP session %s set up over %s for %s", session_id, session.protocol, address[0]
         )
@@ -594,6 +709,10 @@ class MjpegRtspServer:
         with self._lock:
             session = self._sessions.pop(session_id, None)
         if session is not None:
+            with session.wake:
+                session.closed = True
+                session.pending = None
+                session.wake.notify_all()
             session.close()
 
     def _transport_reply(self, session: RtpSession) -> str:
@@ -607,7 +726,7 @@ class MjpegRtspServer:
 
     @staticmethod
     def _respond(
-        connection: socket.socket,
+        peer: _Peer,
         request_headers: Dict[str, str],
         status: int,
         reason: str,
@@ -619,7 +738,7 @@ class MjpegRtspServer:
         lines.append("Server: industrial-cognition-rtsp/1.0")
         lines.extend(f"{key}: {value}" for key, value in headers.items())
         message = "\r\n".join(lines) + "\r\n\r\n" + body
-        connection.sendall(message.encode("iso-8859-1"))
+        peer.send(message.encode("iso-8859-1"))
 
     def _advertised_host(self) -> str:
         for address in candidate_addresses():
@@ -652,42 +771,103 @@ class MjpegRtspServer:
         self._timestamp = (
             self._timestamp + int(RTP_CLOCK_HZ / self._fps)
         ) & 0xFFFFFFFF
-        payloads = packetize_frame(frame)
-        with self._lock:
-            sessions = [session for session in self._sessions.values() if session.playing]
-        if not sessions:
-            return
-        # Every RTP packet needs its own sequence number: receivers use them for ordering
-        # and treat a repeated number as a duplicate, which drops every fragment after the
-        # first ("received packet without a start chunk" in FFmpeg's log).
-        sequence = []
-        for index in range(len(payloads)):
-            self._sequence = (self._sequence + 1) & 0xFFFF
-            sequence.append((self._sequence, index == len(payloads) - 1))
-        for session in sessions:
-            for (seq, marker), payload in zip(sequence, payloads):
-                packet = struct.pack(
-                    ">BBHII",
-                    0x80,
-                    (0x80 if marker else 0x00) | JPEG_PAYLOAD_TYPE,
-                    seq,
-                    self._timestamp,
-                    session.ssrc,
-                ) + payload
-                self._send_packet(session, packet)
-        self._frames_sent += 1
-
-    def _send_packet(self, session: RtpSession, packet: bytes) -> None:
         try:
-            if session.protocol == "tcp":
-                connection = session.connection
-                channel = session.interleaved or 0
-                if connection is None:
+            payloads = packetize_frame(frame)
+        except ValueError as exc:
+            logger.warning("cannot packetise the frame: %s", exc)
+            return
+        with self._lock:
+            sessions = [
+                session
+                for session in self._sessions.values()
+                if session.playing and not session.closed
+            ]
+        self._last_frame_at = time.monotonic()
+        self._frames_sent += 1
+        for session in sessions:
+            with session.wake:
+                if session.pending is not None:
+                    # The client has not drained the previous frame. Skipping it keeps
+                    # the viewer on the newest frame instead of feeding it a backlog;
+                    # a queue here would grow without bound on a slow client.
+                    session.frames_dropped += 1
+                    self._frames_dropped += 1
+                session.pending = (self._timestamp, payloads)
+                session.wake.notify()
+
+    def _write_frames(self, session: RtpSession) -> None:
+        """Send this client's frames, one at a time, on its own thread."""
+        while not self._stop.is_set():
+            with session.wake:
+                while (
+                    session.pending is None
+                    and not session.closed
+                    and not self._stop.is_set()
+                ):
+                    session.wake.wait(0.5)
+                if session.closed or self._stop.is_set():
                     return
-                connection.sendall(bytes([0x24, channel]) + struct.pack(">H", len(packet)) + packet)
-            elif session.socket is not None and session.address is not None:
-                session.socket.sendto(packet, session.address)
-        except OSError as exc:
-            # A client that walked away is normal; drop it instead of logging per packet.
-            logger.debug("RTSP session %s send failed: %s", session.session_id, exc)
-            self._drop(session.session_id)
+                timestamp, payloads = session.pending
+                session.pending = None
+            try:
+                self._send_frame(session, timestamp, payloads)
+            except OSError as exc:
+                session.error = str(exc) or exc.__class__.__name__
+                logger.info(
+                    "RTSP session %s dropped: %s", session.session_id, session.error
+                )
+                self._drop(session.session_id)
+                return
+            session.frames_sent += 1
+            if session.frames_sent == 1:
+                logger.info("RTSP session %s is receiving frames", session.session_id)
+
+    def _send_frame(
+        self, session: RtpSession, timestamp: int, payloads: List[bytes]
+    ) -> None:
+        last = len(payloads) - 1
+        if session.protocol == "tcp":
+            peer = session.connection
+            if peer is None:
+                raise OSError("the client connection is gone")
+            channel = session.interleaved or 0
+            # One write per frame (chunked to keep a single send short): fewer syscalls,
+            # and the frame cannot be interleaved with an RTSP reply.
+            buffer = bytearray()
+            for index, payload in enumerate(payloads):
+                packet = self._rtp_packet(session, timestamp, payload, marker=index == last)
+                buffer += bytes([0x24, channel]) + struct.pack(">H", len(packet)) + packet
+                if len(buffer) >= 256 * 1024:
+                    peer.send(bytes(buffer))
+                    buffer.clear()
+            if buffer:
+                peer.send(bytes(buffer))
+            return
+        if session.socket is None or session.address is None:
+            raise OSError("the client RTP socket is gone")
+        for index, payload in enumerate(payloads):
+            session.socket.sendto(
+                self._rtp_packet(session, timestamp, payload, marker=index == last),
+                session.address,
+            )
+
+    @staticmethod
+    def _rtp_packet(
+        session: RtpSession, timestamp: int, payload: bytes, *, marker: bool
+    ) -> bytes:
+        # Every RTP packet needs its own sequence number: receivers use them for
+        # ordering and treat a repeated number as a duplicate, which drops every
+        # fragment after the first ("received packet without a start chunk" in
+        # FFmpeg's log).
+        session.sequence = (session.sequence + 1) & 0xFFFF
+        return (
+            struct.pack(
+                ">BBHII",
+                0x80,
+                (0x80 if marker else 0x00) | JPEG_PAYLOAD_TYPE,
+                session.sequence,
+                timestamp,
+                session.ssrc,
+            )
+            + payload
+        )

@@ -22,6 +22,17 @@
           <span :class="['pill', pipelineRunning ? 'ok' : 'warn']">
             pipeline {{ pipelineRunning ? 'running' : 'degraded' }}
           </span>
+          <span :class="['pill', liveState === 'live' ? 'ok' : liveState === 'stale' ? 'warn' : 'bad']">
+            <template v-if="liveState === 'live'">live · {{ frameAge === null ? 'new' : frameAge.toFixed(1) + 's' }}</template>
+            <template v-else-if="liveState === 'stale'">stale · {{ frameAge === null ? '?' : frameAge.toFixed(1) + 's' }}</template>
+            <template v-else-if="liveState === 'waiting'">waiting for a frame</template>
+            <template v-else-if="liveState === 'other'">capturing another camera</template>
+            <template v-else-if="liveState === 'offline'">camera offline</template>
+            <template v-else>camera unknown</template>
+          </span>
+          <span :class="['pill', tracking.enabled ? 'neutral' : 'warn']" :title="tracking.reason || 'boxes follow the video between inferences'">
+            tracking {{ tracking.enabled ? tracking.tracker : 'off' }}
+          </span>
           <span class="pill neutral">{{ resultFps.toFixed(1) }} results/s</span>
           <span class="pill neutral">frame {{ lastFrameNumber }}</span>
           <button class="ghost" @click="signOut">sign out</button>
@@ -156,6 +167,13 @@
               >
                 activate
               </button>
+              <button
+                class="ghost danger"
+                @click="deleteCamera(camera.camera_id)"
+                :disabled="deleting === camera.camera_id"
+              >
+                {{ deleting === camera.camera_id ? "removing…" : "delete" }}
+              </button>
             </div>
           </div>
 
@@ -166,7 +184,7 @@
               :src="streamUrl"
               alt="camera feed"
               @load="onFeedLoad"
-              @error="streamError = 'no live frames (is capture running?)'"
+              @error="onFeedError"
             />
             <div v-else class="placeholder">
               <p>No live preview.</p>

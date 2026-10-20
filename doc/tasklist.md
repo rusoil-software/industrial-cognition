@@ -76,12 +76,13 @@ sheds frames with bounded latency otherwise, both asserted by tests.
 
 ### **Pre-Stage 3 backlog (agreed 2026-10-17)**
 
-**Status 2026-10-20: 9 of 13 implemented.** Done: 1 (model on PVC), 2 (two workers), 4 (persistence),
-5 (readiness), 6 (auth hardening), 8 (queue hygiene), 10 (CI), plus the `object_type` follow-up.
-Implemented but not yet validated with hardware: 3 (camera discovery + registry - code, console
-and tests are in place, no IP camera on the network yet). Open: 7 (ingress/TLS), 9 (multi-camera),
-11 (detection quality dataset), 12 (GPU decision); 13 (model delivery) is deferred by agreement
-with the MinIO replacement.
+**Status 2026-10-20: 10 of 14 implemented.** Done: 1 (model on PVC), 2 (two workers), 4 (persistence),
+5 (readiness), 6 (auth hardening), 8 (queue hygiene), 10 (CI), 14 (live view: tracked boxes,
+delete, liveness), plus the `object_type` follow-up. Implemented but not yet validated with
+hardware: 3 (camera discovery + registry - code, console and tests are in place, no IP camera
+on the network yet). Open: 7 (ingress/TLS), 9 (multi-camera), 11 (detection quality dataset),
+12 (GPU decision); 13 (model delivery) is deferred by agreement with the MinIO replacement.
+Item 14 was added while testing item 3, so the original list had 13.
 
 Ordered roughly by what blocks what. Items 1-3 are the ones we named; the rest are gaps this
 build exposed that will cost more to fix later than now.
@@ -249,6 +250,48 @@ or state plainly that 60 FPS is out of scope for now.
 **13. &#9744; Model delivery stays manual, by agreement.**
 The artifact lives on a PVC and is copied by hand. Revisit together with the MinIO replacement
 (Stage 4) so the worker pulls it at startup with checksum verification instead of `kubectl cp`.
+
+**14. &#9745; Make the live view trustworthy: tracked boxes, a delete button, honest liveness.** - done 2026-10-20
+Three complaints, one theme: the console could not be believed. *Added while testing item 3,
+not in the original 13.*
+
+* **The RTSP client dropped after ~30 s.** Root cause was `_accept_loop` setting a 30-second
+  socket timeout on an RTSP control connection that is idle by design after `PLAY`: `recv`
+  raised, the session was torn down, the stream closed, and the publisher printed
+  `0 client(s)` while the camera was still publishing. Fixed by keeping idle sessions, giving
+  every client its own writer thread with a single-slot mailbox (the older frame is dropped,
+  never queued), a shared write lock for RTSP replies and interleaved RTP, and
+  `shutdown()` before `close()`. Verified: one client held `rtsp://127.0.0.1:8554/cam` for
+  75 s and 711 frames, where it used to die at 30 s. The heartbeat now separates the two
+  failures it used to conflate: `last frame 12.4s ago` is a silent **camera**, `0 client(s)`
+  with `last frame 0.1s ago` is just nobody watching, and each client gets its own line.
+* **No way to remove a camera.** `delete` per row in the sources panel calls the existing
+  `DELETE /cameras/{id}`; it stops capture when the camera is active, keeps the detection
+  task (re-registering the id brings it back), and clears the stream so a deleted camera does
+  not keep showing its last frame.
+* **A frozen snapshot looked live.** The preview is now a real stream at `STREAM_FPS` (10)
+  that ends after `STREAM_IDLE_TIMEOUT` (15 s) without a new frame, and the top bar carries a
+  live badge fed by `/status` every 2 s: `live · 0.4s`, `stale · 12.1s`, `camera offline`,
+  `waiting for a frame`, `capturing another camera`. The staleness budget is cadence-aware
+  (`max(5 s, 3 intervals)`), so a 0.2 FPS dev replay is not called dead. `/cameras` entries
+  carry `last_frame_age_seconds` and `streaming`.
+* **Boxes moved once per inference.** On CPU that is once per ~11 s, so a walking worker's
+  box teleported. `src/vision/tracking.py` seeds one OpenCV tracker per detection and
+  advances them at `TRACK_FPS` (10) between inferences, publishing
+  `{"type": "tracks"}` on the same WebSocket; the console draws tracks solid and the last
+  inference thin and dashed, so interpolation is never mistaken for a model output. KCF is
+  the default (CSRT is several times more expensive per update), fallback kcf → csrt → mil,
+  and a missing tracker, a bad `TRACKER_TYPE` or a tracker exception disables the overlay
+  without touching capture or detection. `api.txt` moved to
+  `opencv-contrib-python-headless` (same version) for the trackers.
+  Verified live in minikube: `tracking {enabled: true, tracker: "kcf", tracks: 4, seeded: 7,
+  updated: 23, lost: 0}` and 6 `tracks` messages in 30 s carrying `track_id`, `object_type`,
+  normalised geometry, `age` and `stale` for `robot` 0.2745 / `robot` 0.2687 / `person` 0.2197.
+  Tracking is an aid, not measurement: rows in `detection_results` still come from inference.
+* Tests: 15 new (`tests/pipeline/test_runner_tracking.py`, `tests/api/test_stream_freshness.py`,
+  `tests/vision/test_tracking.py`, 5 lifecycle tests in `tests/camera/test_rtsp_server.py`);
+  suite 513 passed / 13 skipped. Reference: `doc/camera.md` (console, liveness, RTSP keepalive)
+  and `doc/vision-pipeline.md` §18.
 
 ### **Stage 3: Polish & Hardening**
 

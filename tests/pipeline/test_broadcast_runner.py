@@ -174,7 +174,7 @@ def build_runner(**overrides):
     prompt_provider = overrides.pop("prompt_provider", None)
     config = RunnerConfig(
         capture=CaptureConfig(camera_id="cam0", encode_max_side=64, jpeg_quality=60),
-        target_fps=90,
+        target_fps=overrides.pop("target_fps", 90),
         prompt_refresh_seconds=overrides.pop("prompt_refresh_seconds", 0.05),
         max_in_flight=32,
     )

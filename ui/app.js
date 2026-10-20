@@ -52,6 +52,12 @@ createApp({
     const pipelineRunning = ref(false);
     const streaming = ref(false);
     const streamError = ref("");
+    const streamNonce = ref(0);
+    const tracks = ref([]);
+    const tracking = ref({ enabled: false, tracker: null, reason: null, tracks: 0 });
+    const frameAge = ref(null);
+    const liveState = ref("unknown");
+    const deleting = ref("");
     const saving = ref(false);
     const message = ref("");
     const messageKind = ref("ok");
@@ -64,12 +70,16 @@ createApp({
 
     let socket = null;
     let redrawQueued = false;
+    let healthTimer = null;
+    let retryTimer = null;
     let resultTimes = [];
     const seenLabels = new Map();
     const palette = ["#4ade80", "#60a5fa", "#fbbf24", "#f472b6", "#a78bfa", "#22d3ee"];
 
     const streamUrl = computed(
-      () => `/cameras/${encodeURIComponent(cameraId.value)}/stream?ts=${Date.now()}`
+      () =>
+        `/cameras/${encodeURIComponent(cameraId.value)}/stream` +
+        `?ts=${streamNonce.value}`
     );
 
     function colourFor(label) {
@@ -232,6 +242,65 @@ createApp({
       }
     }
 
+    async function deleteCamera(id) {
+      if (!window.confirm(`Remove camera ${id}? Its detection task is kept.`)) return;
+      deleting.value = id;
+      try {
+        await api(`/cameras/${encodeURIComponent(id)}`, { method: "DELETE" });
+        flash(`camera ${id} removed`, "ok");
+        tracks.value = [];
+        const wasSelected = cameraId.value === id;
+        if (wasSelected) {
+          // The registry stops capture when the active camera is deleted, so the console
+          // must not keep showing the removed camera's stream.
+          cameraId.value = "";
+          streaming.value = false;
+          detections.value = [];
+        }
+        await refreshCameras();
+        if (wasSelected) onCameraChange();
+      } catch (error) {
+        flash(String(error.message || error), "error");
+      } finally {
+        deleting.value = "";
+      }
+    }
+
+    // Polling /status is what makes the console honest about the connection: the MJPEG
+    // stream keeps the last frame on screen when capture dies, so only the age of the
+    // newest frame tells an operator whether the camera is still there.
+    async function pollHealth() {
+      try {
+        const body = await api("/status");
+        const latest = body.latest_frame || null;
+        // "Late" is relative to the cadence capture was asked for: a dev replay at 0.2 FPS
+        // is healthy at four seconds of age, a 30 FPS camera at four seconds is dead.
+        const staleAfter = (latest && latest.stale_after_seconds) || 5;
+        frameAge.value = latest ? latest.age_seconds : null;
+        const running = Boolean(body.running);
+        const capturedCamera = (body.pipeline && body.pipeline.camera_id) || null;
+        if (!running || !latest) {
+          liveState.value = running ? "waiting" : "offline";
+        } else if (capturedCamera && capturedCamera !== cameraId.value) {
+          liveState.value = "other";
+        } else {
+          liveState.value = latest.age_seconds <= staleAfter ? "live" : "stale";
+        }
+        tracking.value = body.tracking || tracking.value;
+        if (!tracking.value.enabled) tracks.value = [];
+      } catch (error) {
+        liveState.value = "offline";
+        frameAge.value = null;
+      }
+    }
+
+    function retryStream() {
+      // A closed MJPEG response leaves the <img> on its last frame; bumping the nonce
+      // opens a new stream so a restarted capture comes back without a page reload.
+      streamNonce.value += 1;
+      streaming.value = true;
+    }
+
     function onCameraChange() {
       streamError.value = "";
       streaming.value = false;
@@ -297,11 +366,25 @@ createApp({
     function startStream() {
       streamError.value = "";
       streaming.value = true;
+      streamNonce.value += 1;
     }
 
     function onFeedLoad() {
       streamError.value = "";
       resizeOverlay();
+      // Every MJPEG part fires `load`: redraw the overlay here so tracked boxes land on
+      // the frame that is actually on screen, not on the previous one.
+      scheduleDraw();
+    }
+
+    function onFeedError() {
+      streamError.value = "no live frames - waiting for the camera";
+      streaming.value = false;
+      liveState.value = "offline";
+      if (retryTimer) window.clearTimeout(retryTimer);
+      retryTimer = window.setTimeout(() => {
+        if (authenticated.value) retryStream();
+      }, 5000);
     }
 
     function resizeOverlay() {
@@ -326,26 +409,67 @@ createApp({
       const height = canvas.height / ratio;
       context.clearRect(0, 0, width, height);
 
-      for (const detection of detections.value) {
-        const x = detection.x_norm * width;
-        const y = detection.y_norm * height;
-        const w = detection.width_norm * width;
-        const h = detection.height_norm * height;
-        const colour = colourFor(detection.object_type);
+      function box(item) {
+        return {
+          x: item.x_norm * width,
+          y: item.y_norm * height,
+          w: item.width_norm * width,
+          h: item.height_norm * height,
+        };
+      }
 
-        context.lineWidth = 2;
-        context.strokeStyle = colour;
-        context.strokeRect(x, y, w, h);
-
-        const label = `${detection.object_type} ${(detection.confidence * 100).toFixed(0)}%`;
+      function label(text, left, top, colour) {
         context.font = "600 12px system-ui, sans-serif";
         const padding = 4;
-        const textWidth = context.measureText(label).width;
-        const labelY = y > 18 ? y - 18 : y + 2;
+        const textWidth = context.measureText(text).width;
+        const labelY = top > 18 ? top - 18 : top + 2;
         context.fillStyle = colour;
-        context.fillRect(x, labelY, textWidth + padding * 2, 16);
+        context.fillRect(left, labelY, textWidth + padding * 2, 16);
         context.fillStyle = "#0b1120";
-        context.fillText(label, x + padding, labelY + 12);
+        context.fillText(text, left + padding, labelY + 12);
+      }
+
+      // The last inference, drawn thin and dashed: this is what the model actually said,
+      // which on a GPU-less host may be several seconds old.
+      if (tracks.value.length) {
+        context.save();
+        context.globalAlpha = 0.55;
+        context.setLineDash([4, 4]);
+        context.lineWidth = 1;
+        for (const detection of detections.value) {
+          const { x, y, w, h } = box(detection);
+          context.strokeStyle = colourFor(detection.object_type);
+          context.strokeRect(x, y, w, h);
+        }
+        context.restore();
+      } else {
+        for (const detection of detections.value) {
+          const { x, y, w, h } = box(detection);
+          const colour = colourFor(detection.object_type);
+          context.lineWidth = 2;
+          context.strokeStyle = colour;
+          context.strokeRect(x, y, w, h);
+          label(
+            `${detection.object_type} ${(detection.confidence * 100).toFixed(0)}%`,
+            x,
+            y,
+            colour
+          );
+        }
+      }
+
+      // Tracked boxes move with the video between inferences; they are the primary
+      // signal, so they are solid and sit on top.
+      for (const track of tracks.value) {
+        const { x, y, w, h } = box(track);
+        const colour = colourFor(track.object_type);
+        context.save();
+        if (track.stale) context.setLineDash([6, 4]);
+        context.lineWidth = track.stale ? 2 : 3;
+        context.strokeStyle = colour;
+        context.strokeRect(x, y, w, h);
+        context.restore();
+        label(`${track.object_type} #${track.track_id}`, x, y, colour);
       }
     }
 
@@ -429,6 +553,12 @@ createApp({
           pipelineRunning.value = false;
           return;
         }
+        if (payload.type === "tracks") {
+          // Tracked boxes arrive at the camera rate, between the (slow) inferences.
+          tracks.value = payload.tracks || [];
+          scheduleDraw();
+          return;
+        }
 
         const metadata = payload.metadata || {};
         lastFrameNumber.value = metadata.frame_number ?? lastFrameNumber.value;
@@ -466,11 +596,15 @@ createApp({
       await loadPrompts();
       startStream();
       connect();
+      pollHealth();
+      healthTimer = window.setInterval(pollHealth, 2000);
       window.addEventListener("resize", resizeOverlay);
     });
 
     onBeforeUnmount(() => {
       window.removeEventListener("resize", resizeOverlay);
+      window.clearInterval(healthTimer);
+      window.clearTimeout(retryTimer);
       if (socket) socket.close();
     });
 
@@ -496,6 +630,14 @@ createApp({
       registerCamera,
       activateCamera,
       probeCamera,
+      deleteCamera,
+      deleting,
+      tracks,
+      tracking,
+      frameAge,
+      liveState,
+      pollHealth,
+      retryStream,
       queries,
       applied,
       detections,
@@ -518,6 +660,7 @@ createApp({
       addQuery,
       onCameraChange,
       onFeedLoad,
+      onFeedError,
       loadPrompts,
       savePrompts,
       clearPrompts,

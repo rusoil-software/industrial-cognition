@@ -23,12 +23,15 @@ import shutil
 import socket
 import struct
 import subprocess
+import threading
+import time
 
 import pytest
 
 from src.camera.rtsp_server import (
     JPEG_PAYLOAD_TYPE,
     MjpegRtspServer,
+    RtpSession,
     build_sdp,
     candidate_addresses,
     packetize_frame,
@@ -291,3 +294,198 @@ def test_ffmpeg_decodes_the_stream(jpeg, tmp_path):
     decoded = cv2.imread(str(target))
     assert decoded is not None
     assert decoded.shape[:2] == (HEIGHT, WIDTH)
+
+
+# -- client lifecycle ----------------------------------------------------- #
+#
+# The bug this file now guards against: the accepted control connection had a 30 s
+# read timeout, so a client that behaved correctly (RTSP connections are idle between
+# requests) was dropped and `clients` fell to zero while the camera kept publishing.
+
+
+def _play_udp(server):
+    """Handshake over UDP RTP and return the control socket, base URL and session id."""
+    port = server.snapshot()["port"]
+    rtsp = socket.create_connection(("127.0.0.1", port), timeout=5)
+    rtp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    rtp.bind(("127.0.0.1", 0))
+    rtp.settimeout(5.0)
+    client_port = rtp.getsockname()[1]
+    base = f"rtsp://127.0.0.1:{port}/cam"
+    _request(rtsp, f"OPTIONS {base} RTSP/1.0\r\nCSeq: 1\r\n\r\n")
+    _request(rtsp, f"DESCRIBE {base} RTSP/1.0\r\nCSeq: 2\r\nAccept: application/sdp\r\n\r\n")
+    setup = _request(
+        rtsp,
+        f"SETUP {base}/trackID=0 RTSP/1.0\r\nCSeq: 3\r\n"
+        f"Transport: RTP/AVP;unicast;client_port={client_port}-{client_port + 1}\r\n\r\n",
+    )
+    session = [
+        line.split(":", 1)[1].strip()
+        for line in setup.split("\r\n")
+        if line.lower().startswith("session:")
+    ][0]
+    _request(rtsp, f"PLAY {base} RTSP/1.0\r\nCSeq: 4\r\nSession: {session}\r\n\r\n")
+    return rtsp, rtp, base, session
+
+
+def test_an_idle_client_keeps_its_session_and_the_socket_has_no_read_timeout(jpeg):
+    server = MjpegRtspServer(
+        lambda: jpeg, fps=10.0, width=WIDTH, height=HEIGHT, host="127.0.0.1", port=0
+    )
+    server.start()
+    rtsp = rtp = None
+    try:
+        rtsp, rtp, base, session = _play_udp(server)
+        # A timeout here is the regression: recv() on an idle connection would raise.
+        assert server._sessions[session].connection.sock.gettimeout() is None
+        time.sleep(1.5)
+        keepalive = _request(
+            rtsp,
+            f"GET_PARAMETER {base} RTSP/1.0\r\nCSeq: 9\r\nSession: {session}\r\n\r\n",
+        )
+        assert keepalive.startswith("RTSP/1.0 200")
+        assert server.snapshot()["clients"] == 1
+    finally:
+        for sock in (rtp, rtsp):
+            if sock is not None:
+                sock.close()
+        server.stop()
+
+
+def test_snapshot_reports_client_progress_and_frame_age(jpeg):
+    server = MjpegRtspServer(
+        lambda: jpeg, fps=25.0, width=WIDTH, height=HEIGHT, host="127.0.0.1", port=0
+    )
+    server.start()
+    rtsp = rtp = None
+    try:
+        rtsp, rtp, _base, session = _play_udp(server)
+        deadline = time.monotonic() + 5.0
+        while server.snapshot()["sessions"][0]["frames_sent"] < 1:
+            assert time.monotonic() < deadline, "no frame reached the client"
+            time.sleep(0.02)
+        stats = server.snapshot()
+        assert stats["clients"] == 1
+        assert stats["sessions"][0]["playing"] is True
+        assert stats["frame_age_seconds"] is not None
+        assert 0.0 <= stats["frame_age_seconds"] < 5.0
+        assert stats["sessions"][0]["id"] == session
+    finally:
+        for sock in (rtp, rtsp):
+            if sock is not None:
+                sock.close()
+        server.stop()
+
+
+def test_stop_returns_promptly_with_an_idle_client(jpeg):
+    server = MjpegRtspServer(
+        lambda: jpeg, fps=5.0, width=WIDTH, height=HEIGHT, host="127.0.0.1", port=0
+    )
+    server.start()
+    rtsp = rtp = None
+    try:
+        rtsp, rtp, _base, _session = _play_udp(server)
+        started = time.monotonic()
+        server.stop()
+        assert time.monotonic() - started < 5.0
+    finally:
+        for sock in (rtp, rtsp):
+            if sock is not None:
+                sock.close()
+        server.stop()
+
+
+class _RecordingPeer:
+    """A TCP client that accepts whatever it is sent and records it."""
+
+    def __init__(self) -> None:
+        self.writes = 0
+        self.closed = False
+
+    def send(self, data: bytes) -> None:
+        self.writes += 1
+
+    def shutdown(self) -> None:
+        self.closed = True
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _BlockingPeer:
+    """A TCP client whose socket has stopped draining."""
+
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.writes = 0
+
+    def send(self, data: bytes) -> None:
+        self.writes += 1
+        self.started.set()
+        self.release.wait(10.0)
+
+    def shutdown(self) -> None:
+        self.release.set()
+
+    def close(self) -> None:
+        self.release.set()
+
+
+def _session(session_id: str, peer) -> RtpSession:
+    return RtpSession(
+        session_id=session_id,
+        protocol="tcp",
+        connection=peer,
+        interleaved=0,
+        playing=True,
+    )
+
+
+def test_a_stalled_client_does_not_stall_the_others(jpeg):
+    server = MjpegRtspServer(
+        lambda: jpeg, fps=25.0, width=WIDTH, height=HEIGHT, host="127.0.0.1", port=0
+    )
+    slow_peer, fast_peer = _BlockingPeer(), _RecordingPeer()
+    slow, fast = _session("slow", slow_peer), _session("fast", fast_peer)
+    with server._lock:
+        server._sessions["slow"] = slow
+        server._sessions["fast"] = fast
+    server._spawn(server._write_frames, "test-slow", slow)
+    server._spawn(server._write_frames, "test-fast", fast)
+    try:
+        for _ in range(3):
+            server._broadcast(jpeg)
+        deadline = time.monotonic() + 5.0
+        while fast.frames_sent < 1:
+            assert time.monotonic() < deadline, "the healthy client received nothing"
+            time.sleep(0.02)
+        # The stalled client is blocked inside send(); the healthy one still progressed.
+        assert slow_peer.started.wait(5.0)
+        assert fast.frames_sent >= 1
+        assert slow.frames_sent == 0
+    finally:
+        slow_peer.release.set()
+        fast_peer.closed = True
+        server.stop()
+
+
+def test_a_frame_that_arrives_while_the_previous_one_is_pending_is_dropped(jpeg):
+    server = MjpegRtspServer(
+        lambda: jpeg, fps=25.0, width=WIDTH, height=HEIGHT, host="127.0.0.1", port=0
+    )
+    peer = _BlockingPeer()
+    session = _session("slow", peer)
+    with server._lock:
+        server._sessions["slow"] = session
+    try:
+        # The sender is not running, so the slot stays occupied: the policy under test is
+        # "replace, never queue", which is what keeps a slow viewer on the newest frame.
+        server._broadcast(jpeg)
+        server._broadcast(jpeg)
+        server._broadcast(jpeg)
+        assert session.pending is not None
+        assert session.frames_dropped == 2
+        assert server.snapshot()["frames_dropped"] == 2
+    finally:
+        server.stop()

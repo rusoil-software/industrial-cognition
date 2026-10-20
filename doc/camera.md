@@ -137,10 +137,53 @@ The camera picker now has a **sources** button. It opens:
    form below.
 2. **register form** - id, label, source, user, password, `activate now`.
 3. **registered cameras** - kind, redacted source, `active` and `password stored` badges,
-   plus `probe` and `activate` per row.
+   plus `probe`, `activate` and `delete` per row.
 
 Registering a camera does not create a task; set the prompts in the usual editor for that
 camera id afterwards.
+
+`delete` removes the camera row and, when it is the active one, stops capture. Its detection
+task (the prompts) is kept on purpose: re-registering the same id brings the task back
+without retyping the queries. Deleting a camera you are watching clears the stream, because
+a dead capture would otherwise leave the browser showing its last frame forever.
+
+### Is the camera still there?
+
+An MJPEG stream is a sequence of stills, and a browser keeps the last one on screen when the
+stream stops. So the console does not rely on the image to answer "is it live?":
+
+- the **live badge** in the top bar comes from `GET /status` every 2 seconds and shows the
+  age of the newest captured frame: `live` under 5 s, `stale` beyond that, `camera offline`
+  when capture is not running, `waiting for a frame` when it runs but has produced none, and
+  `capturing another camera` when the pipeline follows a different camera than the one
+  selected. The same interval carries the tracking state (`tracking kcf` or `tracking off`).
+- `/cameras` entries carry `last_frame_age_seconds` and `streaming`.
+- `/cameras/{id}/stream` closes the response after `STREAM_IDLE_TIMEOUT` (15 s) without a new
+  frame, so the image does not pretend to be live; the console re-opens it after 5 seconds.
+
+### Boxes between inferences
+
+On a GPU-less host one inference takes seconds, which makes detection boxes look frozen on a
+moving object. The capture process therefore runs a per-camera *tracker pool*: every
+inference seeds an OpenCV tracker per detection, and the trackers are advanced at `TRACK_FPS`
+(10) on the newest frames.
+
+- `src/vision/tracking.py` publishes `{"type": "tracks", ...}` messages that carry the same
+  normalised geometry keys as detections plus `track_id`, `age` and `stale`.
+- The console draws tracked boxes solid (dashed when the tracker lost its object) and the
+  last inference as thin dashed boxes, so it stays obvious what the model actually saw and
+  what is interpolation.
+- The seed frame is the *newest* frame, not the one the detection came from: on CPU the
+  detection is seconds old, and seeding a stale frame would put every box in the wrong place.
+- Tracker choice is `TRACKER_TYPE` (`kcf` by default, then `csrt`, then `mil`). KCF is the
+  default because CSRT costs several times more per update and this runs next to inference.
+  With no tracker installed, `TRACKING_ENABLED=0`, or a bad name, capture and detection keep
+  working and the console says `tracking off` with the reason in `/status` (`tracking.reason`).
+- The trackers live in `opencv-contrib-python-headless`, which is why `requirements/api.txt`
+  pins the contrib build of the same OpenCV version.
+
+Tracking is an operator aid, not measurement: `detection_results` rows come from inference
+only. When a track and a detection disagree, the detection is the answer.
 
 ## Publishing a laptop camera as RTSP
 
@@ -205,6 +248,34 @@ is restored afterwards, so a webcam on the same process is unaffected.
 This is a measured difference, not a preference. The same stream that read 640x480 on the
 host returned **no frame at all** from inside a pod over UDP (the receiver's UDP port is a pod
 address the host cannot route to), and TCP interleaved delivered every frame.
+
+### A client that goes quiet is not a client that left
+
+An RTSP control connection is idle by design: after `PLAY` the client sends nothing for
+minutes while the RTP flows on the other channel. The publisher originally set a 30-second
+socket timeout on that connection, so `recv` raised, the session was dropped, the stream
+closed, and `snapshot()` reported `0 client(s)` while the camera was still publishing - the
+console froze and a reader could only guess why.
+
+The server now keeps idle sessions, gives every client its own writer thread, and holds at
+most one pending frame per client, dropping the older one rather than queueing. A slow
+consumer therefore costs its own frames and nothing else: a stalled client no longer blocks
+the accept loop or the other viewers.
+
+`snapshot()` and the script's heartbeat tell the two failures apart:
+
+```
+serving cam - 1 client(s), 214 frame(s) sent, 3 dropped, last frame 0.1s ago
+client 192.168.1.33:52314 (tcp) - 214 frame(s), 3 dropped
+```
+
+* `last frame 0.1s ago` with clients listed: the stream is healthy.
+* `last frame 12.4s ago`: the *camera* went silent (shutter closed, unplugged, held by
+  another process) - not a network problem.
+* `0 client(s)` with a recent frame: nobody is watching; the publisher is fine.
+
+Per-session counters are also in `MjpegRtspServer.snapshot()` (`clients_served`, `sessions`,
+`frame_age_seconds`), so the same facts are testable without reading a log.
 
 Verified end to end: OpenCV reads `rtsp://127.0.0.1:8554/cam` at 640x480, the registry probe
 reports `{"ok": true, "width": 640, "height": 480}` against it, and a registered camera fed
