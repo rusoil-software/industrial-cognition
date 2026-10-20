@@ -1,0 +1,29 @@
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# ==============================================================================
+#
+# OPTIONAL cert-manager component. Not referenced by any overlay: applying it to a cluster
+# without the cert-manager CRDs fails, so it has to be an explicit choice. See the header of
+# issuer.yaml and doc/k8s.md "TLS".
+#
+#   kubectl apply -k k8s/components/tls/cert-manager
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: cogni-ns
+
+resources:
+  - issuer.yaml

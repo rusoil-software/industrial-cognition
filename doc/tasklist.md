@@ -164,10 +164,16 @@ rotated, `AUTH_COOKIE_SECURE=1` behind TLS, token lifetime decided, and `/docs` 
 accounts and roles are a later step, but the shared token must not survive into a shared
 network.
 
-**7. &#9744; Real ingress and TLS.**
-The dev overlay installs no ingress controller (NodePort 30080 is dev-only) and the prod ingress
-references secret `industrial-cognition-tls` that nothing creates. Need cert-manager or a
-provided certificate, a real hostname, and probes that match item 5.
+**7. &#9745; Real ingress and TLS.** - done 2026-10-20
+The cluster has no route out, so the certificate comes from a **local internal CA**:
+`scripts/tls-selfsigned.sh` / `.ps1` create `industrial-cognition-tls` (served by the ingress) and
+`industrial-cognition-tls-ca` (the trust anchor). A CA rather than a self-signed leaf, so
+operators import one file and renewals are invisible. `k8s/components/tls/cert-manager` holds the
+equivalent chain for sites that already run cert-manager - deliberately not referenced by any
+overlay, because it needs their CRDs.
+Verified live: HTTP/2 200 with `ssl_verify_result=0` trusting only the internal CA, chain issued
+by `IndustrialCognitionInternalCA`, and exit 60 without it. The dev overlay still uses a NodePort
+because no DNS name exists in a laptop cluster; production terminates TLS at the ingress.
 
 **8. &#9745; Broker-side queue hygiene.** - done 2026-10-20
 Both work queues now carry `x-max-length=256`, `x-overflow=drop-head`, a 60 s `x-message-ttl`
@@ -177,6 +183,15 @@ arguments and `vision.priority` matches. The dead-letter queue needed an explici
 `worker_ready` declaration because RabbitMQ drops messages dead-lettered into a missing
 exchange, silently; verified by letting a frame expire with no consumer: `vision` 2 -> 0 and
 `vision.dlq` 0 -> 3.
+
+**14. &#9744; mTLS between service pods.** Deferred until the cluster has a CNI that can
+enforce it - there are no NetworkPolicies in the namespace yet, so mTLS would protect against a
+threat the network does not restrict. Needs a certificate per workload and enforcement
+(a service mesh, or cert-manager plus policy). Discussed 2026-10-20.
+
+**15. &#9744; Secrets manager (Vault / OpenBao).** `secrets.env` is generated per checkout and
+git-ignored, which is adequate for one cluster. A manager becomes worthwhile when several
+environments share credentials and rotation has to be auditable. Discussed 2026-10-20.
 
 **9. &#9744; Decide multi-camera shape.**
 The runner is one source per process; per-camera prompts already exist but queues, task routing

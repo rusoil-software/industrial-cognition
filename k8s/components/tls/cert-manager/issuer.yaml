@@ -1,0 +1,90 @@
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+#
+# OPTIONAL: cert-manager path to the same internal CA.
+#
+# `scripts/tls-selfsigned.sh` is the default because it needs nothing but openssl once per
+# rotation. This component is for sites that already run cert-manager and would rather it
+# renew the certificate on a schedule.
+#
+# It is deliberately NOT referenced by k8s/base or the overlays: applying it to a cluster
+# without the cert-manager CRDs fails, so it must be an explicit choice.
+#
+#   kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.16.1/cert-manager.yaml
+#   kubectl apply -k k8s/components/tls/cert-manager
+#
+# Air-gapped sites must mirror cert-manager's images (controller, webhook, cainjector,
+# startupapicheck) and apply its release manifest from a local copy; there is no way around
+# that, and it is the main reason the script exists as an alternative.
+#
+# The chain is the standard one for an offline internal CA:
+#
+#   selfsigned ClusterIssuer -> CA Certificate -> CA Issuer -> server Certificate
+#
+# Issuing the *server* certificate from an Issuer backed by a stored CA (rather than from the
+# selfsigned issuer directly) is what keeps the trust anchor stable across rotations: clients
+# import ca.crt once and never notice a renewal.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: cogni-selfsigned
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: cogni-ca
+  namespace: cert-manager
+spec:
+  isCA: true
+  commonName: Industrial Cognition Internal CA
+  secretName: cogni-ca-key-pair
+  duration: 87600h # 10 years: it is an offline CA, rotation is a site decision
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: cogni-selfsigned
+    kind: ClusterIssuer
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: cogni-ca-issuer
+  namespace: cogni-ns
+spec:
+  ca:
+    secretName: cogni-ca-key-pair
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: industrial-cognition-tls
+  namespace: cogni-ns
+spec:
+  # The same Secret name the ingress already references, so no manifest changes.
+  secretName: industrial-cognition-tls
+  duration: 2160h # 90 days
+  renewBefore: 360h # renew 15 days ahead
+  commonName: mvm.example.com
+  dnsNames:
+    - mvm.example.com
+    - industrial-cognition
+    - api
+    - localhost
+  issuerRef:
+    name: cogni-ca-issuer
+    kind: Issuer

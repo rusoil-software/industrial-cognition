@@ -750,3 +750,65 @@ A third job, **cluster**, is manual (`workflow_dispatch`): it builds both images
 deploys, migrates through a Job and runs `scripts/smoke_auth.py` against the real surface. It is
 gated because it takes minutes, not seconds - but it is the only job that would have caught the
 auth, readiness and stream bugs found by hand.
+
+---
+
+## TLS on-premise: an internal CA, no internet
+
+The MVP runs on a factory network with no route out. That rules out Let's Encrypt (needs a
+publicly reachable name) and makes cert-manager a mirroring exercise. Neither is necessary: an
+internal CA needs one machine with openssl, once per rotation.
+
+```
+scripts/tls-selfsigned.sh --host mvm.example.com     # POSIX
+scripts/tls-selfsigned.ps1 -HostName mvm.example.com  # Windows
+```
+
+It creates two Secrets:
+
+| Secret | Contents | Purpose |
+| --- | --- | --- |
+| `industrial-cognition-tls` | `tls.crt`, `tls.key` | what the ingress serves (name already referenced by `ingress.yaml`) |
+| `industrial-cognition-tls-ca` | `ca.crt` | the trust anchor clients import |
+
+**Why a CA rather than a self-signed leaf.** A self-signed server certificate has to be trusted
+individually, so every rotation re-teaches every client. With a CA, operators import `ca.crt`
+once and renewals are invisible. Re-running the script rotates the leaf; only a compromised CA
+key requires re-import.
+
+The script runs openssl in a container when the host has none (a default Windows box does not),
+and generates the private key **on the machine that runs it** - the CA key is never written
+outside a temporary directory.
+
+### Verified
+
+Against the live cluster, with the ingress controller and the certificate in place:
+
+```
+curl --cacert ca.crt --resolve mvm.example.com:443:<ingress-ip> https://mvm.example.com/health
+  -> HTTP/2 200, ssl_verify_result=0
+  -> subject CN=mvm.example.com; issuer CN=IndustrialCognitionInternalCA
+  -> without --cacert: exit 60 (certificate verify failed)
+```
+
+The last line matters as much as the first: it proves the certificate is ours and not something a
+public CA would already have vouched for.
+
+### If you do run cert-manager
+
+`k8s/components/tls/cert-manager` holds the equivalent chain (selfsigned ClusterIssuer -> CA
+Certificate -> CA Issuer -> server Certificate) for sites that already operate cert-manager and
+would rather it renew on a schedule. It is **not** referenced by any overlay, because applying it
+without the cert-manager CRDs fails; it is an explicit choice. Air-gapped sites must mirror
+cert-manager's images and apply its release manifest from a local copy.
+
+### Not done, deliberately
+
+* **mTLS between pods.** It would mean issuing a certificate per workload and enforcing
+  `PeerAuthentication`-equivalent policy (a service mesh, or cert-manager plus NetworkPolicy).
+  Worth doing once the cluster has a CNI that can enforce it; today the namespace has no
+  NetworkPolicies at all, so mTLS would protect against a threat the network does not yet
+  restrict.
+* **A secrets manager.** `secrets.env` is generated per checkout and git-ignored, which is
+  adequate for one cluster. Vault or OpenBao becomes worthwhile when several environments share
+  credentials and rotation has to be auditable.
