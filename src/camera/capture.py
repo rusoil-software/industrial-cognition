@@ -40,6 +40,7 @@ Two things here matter more than they look:
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass
 from typing import Optional, Protocol, runtime_checkable
@@ -53,11 +54,80 @@ __all__ = [
     "CaptureConfig",
     "DeviceFrameSource",
     "FrameSource",
+    "RTSP_TRANSPORT_ENV",
     "SyntheticFrameSource",
     "encode_jpeg",
+    "is_rtsp_source",
+    "rtsp_transport",
 ]
 
 logger = logging.getLogger(__name__)
+
+#: Environment variable holding the RTSP transport OpenCV should negotiate.
+RTSP_TRANSPORT_ENV = "RTSP_TRANSPORT"
+#: OpenCV's FFmpeg backend reads its options from here (``;``-separated pairs).
+FFMPEG_CAPTURE_OPTIONS_ENV = "OPENCV_FFMPEG_CAPTURE_OPTIONS"
+RTSP_TRANSPORTS = ("tcp", "udp")
+RTSP_PREFIXES = ("rtsp://", "rtsps://")
+#: TCP is the default: an RTSP stream behind NAT or across a lossy link loses every
+#: UDP fragment it drops, and one lost fragment costs a whole frame. TCP retransmits
+#: at the price of a little jitter, which a detector sampling frames does not feel.
+DEFAULT_RTSP_TRANSPORT = "tcp"
+
+
+def is_rtsp_source(source: object) -> bool:
+    """True when ``source`` is an RTSP URL rather than a device."""
+    return isinstance(source, str) and source.strip().lower().startswith(RTSP_PREFIXES)
+
+
+def rtsp_transport() -> str:
+    """The RTSP transport to negotiate, from ``RTSP_TRANSPORT``."""
+    configured = (os.getenv(RTSP_TRANSPORT_ENV) or DEFAULT_RTSP_TRANSPORT).strip().lower()
+    if configured in RTSP_TRANSPORTS:
+        return configured
+    logger.warning(
+        "ignoring %s=%r; expected one of %s. Using %s",
+        RTSP_TRANSPORT_ENV,
+        configured,
+        ", ".join(RTSP_TRANSPORTS),
+        DEFAULT_RTSP_TRANSPORT,
+    )
+    return DEFAULT_RTSP_TRANSPORT
+
+
+def _push_rtsp_transport(transport: Optional[str] = None) -> Optional[str]:
+    """Point OpenCV's FFmpeg backend at ``transport`` and return the previous value.
+
+    OpenCV exposes no API for RTSP transport options; the FFmpeg backend reads
+    ``OPENCV_FFMPEG_CAPTURE_OPTIONS`` when a capture is opened. Operator-supplied
+    options are kept, and any existing ``rtsp_transport`` pair is replaced rather
+    than duplicated.
+    """
+    previous = os.environ.get(FFMPEG_CAPTURE_OPTIONS_ENV)
+    # Options come as "name;value;name;value", so dropping an option means dropping
+    # its value with it - otherwise a stray "udp" would become a value for another
+    # option.
+    pairs = (previous or "").split(";")
+    kept: list[str] = []
+    index = 0
+    while index < len(pairs):
+        pair = pairs[index]
+        if pair == "rtsp_transport":
+            index += 2
+            continue
+        if pair:
+            kept.append(pair)
+        index += 1
+    kept.extend(("rtsp_transport", transport or rtsp_transport()))
+    os.environ[FFMPEG_CAPTURE_OPTIONS_ENV] = ";".join(kept)
+    return previous
+
+
+def _restore_capture_options(previous: Optional[str]) -> None:
+    if previous is None:
+        os.environ.pop(FFMPEG_CAPTURE_OPTIONS_ENV, None)
+    else:
+        os.environ[FFMPEG_CAPTURE_OPTIONS_ENV] = previous
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,7 +193,18 @@ class DeviceFrameSource:
         if isinstance(source, str) and source.isdigit():
             source = int(source)
 
-        capture = cv2.VideoCapture(source)
+        previous_options: Optional[str] = None
+        if is_rtsp_source(source):
+            transport = rtsp_transport()
+            logger.info("camera %s: negotiating RTSP over %s", config.camera_id, transport)
+            previous_options = _push_rtsp_transport(transport)
+        try:
+            capture = cv2.VideoCapture(source)
+        finally:
+            # The transport is chosen while opening, so the process-wide variable
+            # does not need to stay set (and a non-RTSP camera is unaffected).
+            if is_rtsp_source(source):
+                _restore_capture_options(previous_options)
         if not capture.isOpened():
             logger.error("could not open capture source %r", config.source)
             capture.release()

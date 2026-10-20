@@ -124,14 +124,22 @@ only the database. The console gained a **sources** panel: scan, use, register, 
 activate. Full reference: `doc/camera.md`. 70 new tests (`tests/camera/`, `tests/api/test_cameras.py`).
 *Without hardware:* `scripts/rtsp_camera.py` publishes a laptop camera as an RTSP stream
 (pure Python, RFC 2435 RTP/JPEG, no `ffmpeg` binary needed) and prints every address it
-answers on, so the production RTSP path can be exercised with no IP camera on the network.
-Verified live: OpenCV reads `rtsp://127.0.0.1:8554/cam` at 640x480 and 10.9 fps, and the
-registry probe reports `{"ok": true, "width": 640, "height": 480}`. Validating this found a
-real bug: `build_frame_source` returned `DeviceFrameSource(config)` for a URL, which **kept
-the configured device index and silently ignored the camera address** - every RTSP camera
-would have opened the local webcam; it also built configs through `config.__dict__`, which
-`CaptureConfig` (slots) does not have, so the digit branch raised `AttributeError`. Both fixed
-and pinned by `tests/camera/test_sources.py`.
+answers on, so the production RTSP path can be exercised with no IP camera on the network;
+`--image PATH` publishes a still frame instead, for a machine whose camera is unusable.
+Verified live: OpenCV reads `rtsp://127.0.0.1:8554/cam` at 640x480 and 10.9 fps, the
+registry probe reports `{"ok": true, "width": 640, "height": 480}`, the registry smoke passes
+15/15 against it, and a camera fed from `--image` produced real rows in `detection_results` -
+`robot` 0.275 x10, `person` 0.220 x5 - through capture, dispatch, CPU inference (~11 s/frame)
+and the detection sink. Validating this found three bugs unit tests had missed:
+`build_frame_source` returned `DeviceFrameSource(config)` for a URL, which **kept the
+configured device index and silently ignored the camera address**, so every RTSP camera would
+have opened the local webcam; it also rebuilt `CaptureConfig` through `__dict__`, which a
+slots dataclass does not have, so the numeric branch raised `AttributeError` (both fixed and
+pinned by `tests/camera/test_sources.py`); and RTSP over UDP cannot cross a NAT boundary -
+the pod's advertised UDP port is a pod address the host cannot route to - so the same stream
+that reads fine on the host produced **no frames at all** from inside a pod. Capture now
+negotiates **TCP interleaved by default** (`RTSP_TRANSPORT=tcp`, override `udp`), which
+delivered every frame.
 *Not yet done:* a real IP camera end to end. There is no IP camera on this network and the
 laptop camera is not visible to Docker Desktop/WSL, so the realistic route stays "publish
 RTSP from the host, register the URL" - which is now one form submission instead of an env

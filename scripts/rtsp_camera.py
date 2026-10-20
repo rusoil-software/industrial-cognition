@@ -24,6 +24,11 @@ opens exactly like a shop-floor IP camera:
     python scripts/rtsp_camera.py 0
     # then, in the console: Sources -> register rtsp://192.168.1.20:8554/cam
 
+Without a usable camera, publish a still image instead - the stream is then a real RTSP
+source carrying content the detector can recognise:
+
+    python scripts/rtsp_camera.py --image assets/images/roboflow_test_detect_human_robot.webp
+
 It is a test aid, not a production relay: MJPEG only, no authentication, no recording.
 """
 
@@ -73,6 +78,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=0,
         help="OpenCV device index (default: 0; try 1, 2, ... for other cameras)",
+    )
+    parser.add_argument(
+        "--image",
+        metavar="PATH",
+        default="",
+        help="publish a still image instead of a camera (no hardware needed)",
     )
     parser.add_argument(
         "--list",
@@ -208,6 +219,34 @@ def build_frame_reader(capture, width: int, height: int, quality: int):  # noqa:
     return read_jpeg, state
 
 
+def build_image_reader(path: str, width: int, height: int, quality: int):  # noqa: ANN201
+    """Return a callable that yields the same encoded image every frame.
+
+    The frame is encoded once: a still image does not change, and the RTP timestamp is
+    what tells a receiver the stream is live. This is how the registry and the detector
+    can be exercised on a machine whose camera is unusable.
+    """
+    import cv2
+
+    frame = cv2.imread(path)
+    if frame is None:
+        raise SystemExit(f"cannot read image {path!r}; pass a PNG, JPEG or WebP file")
+    height_px, width_px = frame.shape[:2]
+    if width and height:
+        frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
+        width_px, height_px = width, height
+    ok, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+    if not ok:
+        raise SystemExit(f"could not encode {path!r} as JPEG")
+    payload = buffer.tobytes()
+    LOGGER.info("publishing image %s (%sx%s)", path, width_px, height_px)
+
+    def read_jpeg() -> Optional[bytes]:
+        return payload
+
+    return read_jpeg, {"size": (width_px, height_px)}
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     logging.basicConfig(
@@ -221,13 +260,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.fps <= 0:
         raise SystemExit("--fps must be positive")
 
-    capture = open_capture(args.device, args.backend)
-    try:
+    capture = None
+    if args.image:
+        read_jpeg, size = build_image_reader(args.image, args.width, args.height, args.quality)
+        origin = f"image {args.image}"
+    else:
+        capture = open_capture(args.device, args.backend)
         read_jpeg, size = build_frame_reader(capture, args.width, args.height, args.quality)
+        origin = f"device {args.device}"
+    try:
         first = read_jpeg()
         if first is None:
             raise SystemExit(
-                f"device {args.device} opened but produced no frame; it may be in use by "
+                f"{origin} opened but produced no frame; it may be in use by "
                 "another application or disabled in the OS privacy settings"
             )
         width, height = size["size"] or (640, 480)
@@ -240,7 +285,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             path=args.path,
         )
         server.start()
-        print(f"\nPublishing device {args.device} ({width}x{height} @ {args.fps:g} fps)")
+        print(f"\nPublishing {origin} ({width}x{height} @ {args.fps:g} fps)")
         print_urls(server.snapshot()["port"], args.path)
         print("Press Ctrl+C to stop.\n")
 
@@ -260,7 +305,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             server.stop()
         return 0
     finally:
-        capture.release()
+        if capture is not None:
+            capture.release()
 
 
 if __name__ == "__main__":  # pragma: no cover - manual entry point

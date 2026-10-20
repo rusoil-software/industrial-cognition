@@ -152,6 +152,8 @@ on the same code path a shop-floor IP camera uses:
 python scripts/rtsp_camera.py --list          # what this machine can open
 python scripts/rtsp_camera.py 0               # device 0, port 8554, path cam
 python scripts/rtsp_camera.py 1 --fps 10 --width 1280 --height 720 --quality 75
+# a camera whose shutter is closed, or no camera at all
+python scripts/rtsp_camera.py --image assets/images/roboflow_test_detect_human_robot.webp
 ```
 
 It prints every address the stream answers on and says which one is local-only:
@@ -184,9 +186,30 @@ The script is a test aid, not a relay:
 * **No recording, no H.264, no RTCP.** One stream, one codec, one purpose.
 * Capture runs at the publish rate (`--fps`), so a slower camera simply delivers fewer
   frames; the console shows the negotiated rate, not the requested one.
+* `--image PATH` publishes a still image instead of a camera. It is encoded once and the RTP
+  timestamps still advance, so a receiver sees a live stream. Use it when the camera is
+  useless (a closed privacy shutter delivers black frames) or absent: the registry and the
+  detector can then be exercised with content the model recognises.
 
-Verified end to end: OpenCV reads `rtsp://127.0.0.1:8554/cam` at 640x480 and the registry
-probe reports `{"ok": true, "width": 640, "height": 480}` against it.
+## RTSP transport
+
+RTSP over UDP is the industry default and the wrong default here. A UDP RTP fragment that
+crosses a NAT boundary or a Docker bridge is lost, and one lost fragment costs the whole
+frame; behind NAT the camera cannot even route its packets back to the receiver.
+
+Capture therefore asks OpenCV for **TCP** by default, and `RTSP_TRANSPORT=udp` restores the
+lower-jitter UDP path on a clean LAN. OpenCV has no API for this: the transport is written
+into `OPENCV_FFMPEG_CAPTURE_OPTIONS` just before the capture is opened and the previous value
+is restored afterwards, so a webcam on the same process is unaffected.
+
+This is a measured difference, not a preference. The same stream that read 640x480 on the
+host returned **no frame at all** from inside a pod over UDP (the receiver's UDP port is a pod
+address the host cannot route to), and TCP interleaved delivered every frame.
+
+Verified end to end: OpenCV reads `rtsp://127.0.0.1:8554/cam` at 640x480, the registry probe
+reports `{"ok": true, "width": 640, "height": 480}` against it, and a registered camera fed
+from `--image` produced real detections in `detection_results` (`robot` 0.275, `person`
+0.220) through capture, dispatch, inference and the sink.
 
 ## Operating notes
 

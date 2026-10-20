@@ -193,6 +193,12 @@ block is the service-endpoint contract that the application modules are wired to
 | `MINIO_BUCKET_FRAMES` / `MINIO_BUCKET_RESULTS` | `frames` / `results` | application |
 | `CAMERA_STREAMS` | `main:rtsp://…` , comma-separated | camera |
 | `CAMERA_IP` / `CAMERA_PORT` / `DEFAULT_FPS` | `192.168.1.10` / `554` / `30` | camera |
+| `RTSP_TRANSPORT` | `tcp` (or `udp`) | `src/camera/capture.py` |
+| `CAMERA_REGISTRY_WATCH` | `1` | capture pod (`src/api/runtime.py`) |
+| `PERSIST_DETECTIONS` / `PERSIST_ONLY_DETECTIONS` | `1` / `1` | `src/api/detection_sink.py` |
+| `PERSIST_MIN_INTERVAL_SECONDS` | `1.0` | `src/api/detection_sink.py` |
+| `DETECTION_RETENTION_DAYS` | `30` | retention CronJob |
+| `CELERY_QUEUE_MAX_LENGTH` / `CELERY_QUEUE_TTL_SECONDS` | `256` / `60` | `src/tasks/celery.py` |
 | `MODBUS_INTERFACE` | `/dev/ttyUSB0` | robot |
 | `MODBUS_BAUD_RATE` | `9600` | robot |
 | `MODBUS_SLAVE_ID` | `1` | robot |

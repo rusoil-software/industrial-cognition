@@ -107,3 +107,45 @@ def test_an_out_of_range_quality_is_refused_before_opening_a_camera(script):
         script.main(["0", "--quality", "0"])
 
     assert "--quality" in str(error.value)
+
+
+def test_an_image_can_stand_in_for_a_camera(script):
+    args = script.build_parser().parse_args(["--image", "frame.png"])
+
+    assert args.image == "frame.png"
+
+
+def test_an_image_is_encoded_once_and_reused(script, tmp_path):
+    import cv2
+    import numpy as np
+
+    path = tmp_path / "frame.png"
+    assert cv2.imwrite(str(path), np.full((48, 64, 3), 200, dtype=np.uint8))
+
+    read_jpeg, state = script.build_image_reader(str(path), 0, 0, 80)
+    first, second = read_jpeg(), read_jpeg()
+
+    assert first is second, "a still image must not be re-encoded per frame"
+    assert first[:2] == b"\xff\xd8"
+    assert state["size"] == (64, 48)
+
+
+def test_an_image_can_be_resized_on_the_way_out(script, tmp_path):
+    import cv2
+    import numpy as np
+
+    path = tmp_path / "frame.png"
+    assert cv2.imwrite(str(path), np.zeros((480, 640, 3), dtype=np.uint8))
+
+    read_jpeg, state = script.build_image_reader(str(path), 320, 240, 80)
+
+    assert state["size"] == (320, 240)
+    decoded = cv2.imdecode(np.frombuffer(read_jpeg(), dtype=np.uint8), cv2.IMREAD_COLOR)
+    assert decoded.shape == (240, 320, 3)
+
+
+def test_a_missing_image_is_reported_by_name(script, tmp_path):
+    with pytest.raises(SystemExit) as error:
+        script.build_image_reader(str(tmp_path / "nope.png"), 0, 0, 80)
+
+    assert "nope.png" in str(error.value)
