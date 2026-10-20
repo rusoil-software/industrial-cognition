@@ -65,13 +65,16 @@ class ReplayFrameSource:
     the worker is byte-for-byte what a camera frame would be - the JPEG on the wire is
     not a constant buffer copied around.
 
-    A slow, deterministic drift is applied: without it, two consecutive frames would be
-    identical and every downstream optimisation (deduplication, motion gating) would be
-    tested in a way that cannot fail. The drift is small enough not to change detections
-    materially and is seeded, so runs are reproducible.
+    The still is slowly panned: without motion, consecutive frames are identical, the
+    console shows one frozen image and every downstream optimisation (deduplication,
+    motion gating, tracking) is tested in a way that cannot fail. The pan is seeded and
+    deterministic, it repeats every :attr:`PAN_PERIOD_FRAMES` frames, and it stays small
+    enough that detections continue to land on the same objects.
     """
 
-    def __init__(self, path: Union[str, Path], *, drift_pixels: int = 2) -> None:
+    PAN_PERIOD_FRAMES = 60
+
+    def __init__(self, path: Union[str, Path], *, drift_pixels: int = 24) -> None:
         self._path = Path(path)
         self._drift = max(0, drift_pixels)
         self._image: Optional[np.ndarray] = None
@@ -107,9 +110,13 @@ class ReplayFrameSource:
         self._frame_index += 1
         frame = self._image
         if self._drift:
-            # Deterministic sub-pixel-ish wander, so consecutive frames differ.
-            dx = int(self._drift * np.sin(self._frame_index / 17.0))
-            dy = int(self._drift * np.cos(self._frame_index / 23.0))
+            # A pan, not a wobble: the offset sweeps the whole amplitude once per period so
+            # consecutive frames move by a few pixels and the console visibly drifts, while
+            # the vertical component is a quarter of it - a still image should look like a
+            # slowly panning camera rather than a shaking one.
+            phase = 2.0 * np.pi * (self._frame_index % self.PAN_PERIOD_FRAMES) / self.PAN_PERIOD_FRAMES
+            dx = int(round(self._drift * np.sin(phase)))
+            dy = int(round(self._drift / 4.0 * np.cos(phase)))
             if dx or dy:
                 matrix = np.float32([[1, 0, dx], [0, 1, dy]])
                 frame = cv2.warpAffine(

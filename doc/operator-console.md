@@ -51,13 +51,16 @@ of silence, which is what makes the browser raise `onerror` and the console retr
 | `GET /status` | pipeline + registry + tracking state (drives the live badge) |
 | `WS /ws/detections` | results as they complete, plus `{"type": "tracks"}` between them |
 | `PUT/GET/DELETE /cameras/{id}/prompt` | the cognition task |
-| `DELETE /cameras/{id}` | remove a registered camera (keeps its task) |
+| `DELETE /cameras/{id}` | forget a camera **and** its cognition task |
 
 ## Running it without a camera
 
 `CAMERA_SOURCE` accepts `replay:/path/to/still.jpg` (`src/camera/sources.py`). The frame
 loop, the queue, the worker, the WebSocket and the UI all run for real; only the pixels
-are constant, with a small deterministic drift so consecutive frames differ. The source
+are synthetic, with a slow pan (24 px amplitude, one sweep per 60 captured frames) so
+consecutive frames differ and the preview visibly moves. Run capture at a few frames per
+second - the dev overlay uses `CAMERA_FPS=5` - otherwise the console is a slideshow of one
+frame every several seconds, which looks exactly like a stalled camera. The source
 logs `replaying ... as a camera: frames are a still image, not live video`, and
 `GET /cameras` reports the pipeline as running - there is no hidden fallback, and an
 unopenable source is reported rather than replaced with fake frames.

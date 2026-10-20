@@ -142,10 +142,13 @@ The camera picker now has a **sources** button. It opens:
 Registering a camera does not create a task; set the prompts in the usual editor for that
 camera id afterwards.
 
-`delete` removes the camera row and, when it is the active one, stops capture. Its detection
-task (the prompts) is kept on purpose: re-registering the same id brings the task back
-without retyping the queries. Deleting a camera you are watching clears the stream, because
-a dead capture would otherwise leave the browser showing its last frame forever.
+`delete` forgets the camera **and** its detection task: the console lists registered cameras
+and configured tasks together, so deleting only the camera row used to leave the entry on
+screen - built from the prompt - and the next delete answered `no camera '<id>'`. Both rows
+go now, and an id that has neither is a 404. Deleting the active camera (or the one the
+running pipeline is capturing) stops capture first, and deleting a camera you are watching
+clears the stream, because a dead capture would otherwise leave the browser showing its
+last frame forever. Re-registering the same id starts from an empty task.
 
 ### Is the camera still there?
 
@@ -290,12 +293,15 @@ from `--image` produced real detections in `detection_results` (`robot` 0.275, `
 * A camera that answers ONVIF but whose stream is H.265 may open and still produce no
   frames in OpenCV; the probe reports that, and the camera's sub-stream (usually H.264)
   is the workaround.
-* `DELETE /cameras/{id}` stops capture first when that camera is active, so deleting the
+* `DELETE /cameras/{id}` deletes the registered row *and* the detection task, and stops
+  capture first when that camera is active (or is the one being captured), so deleting the
   running camera does not leave a pipeline pointed at a row that no longer exists.
 * The dev overlay keeps the `camera` Deployment scaled to zero and lets the API pod
   capture a replay image; in that deployment `activate` restarts the API pod's own
   pipeline. Whatever process has `CAMERA_ENABLED=1` is the one that captures, and
-  `CAMERA_REGISTRY_WATCH=1` is what makes it follow the registry.
+  `CAMERA_REGISTRY_WATCH=1` is what makes it follow the registry. Capture runs at
+  `CAMERA_FPS=5` there, and the replay source pans 24 px per 60 frames, so the preview
+  moves; a slower cadence looks like a frozen camera even when everything is healthy.
 
 ## Verification
 

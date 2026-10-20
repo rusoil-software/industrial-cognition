@@ -37,6 +37,7 @@ pytest.importorskip("pydantic")
 from fastapi import HTTPException  # noqa: E402  (after importorskip)
 
 from src.api import cameras, runtime  # noqa: E402
+from src.api.prompts import service as prompt_service  # noqa: E402
 from src.api.storage import camera_repository  # noqa: E402
 from src.camera.credentials import generate_key  # noqa: E402
 
@@ -198,11 +199,24 @@ def test_a_stored_password_that_cannot_be_decrypted_is_a_503(
     assert "CAMERA_CRED_KEY" in str(caught.value.detail)
 
 
+def _stub_delete(monkeypatch: pytest.MonkeyPatch, prompt_existed: bool) -> list[str]:
+    """Stub the prompt deletion and return the list it records ids into."""
+    deleted_prompts: list[str] = []
+
+    def _delete_prompt(session, camera_id):  # noqa: ANN001, ANN202
+        deleted_prompts.append(camera_id)
+        return prompt_existed
+
+    monkeypatch.setattr(prompt_service, "delete_camera_prompt", _delete_prompt)
+    return deleted_prompts
+
+
 def test_deleting_the_active_camera_stops_capture(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     stopped: list[bool] = []
     removed: list[str] = []
+    deleted_prompts = _stub_delete(monkeypatch, prompt_existed=False)
     monkeypatch.setattr(
         camera_repository,
         "get_camera",
@@ -219,12 +233,16 @@ def test_deleting_the_active_camera_stops_capture(
 
     assert stopped == [True]
     assert removed == ["gate"]
+    # The console lists tasks too, so the delete must take the task with it - otherwise
+    # the row survives the delete and the next attempt answers "no camera".
+    assert deleted_prompts == ["gate"]
 
 
 def test_deleting_an_inactive_camera_does_not_stop_capture(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     stopped: list[bool] = []
+    _stub_delete(monkeypatch, prompt_existed=False)
     monkeypatch.setattr(
         camera_repository, "get_camera", lambda session, camera_id: _camera(active=False)
     )
@@ -236,3 +254,67 @@ def test_deleting_an_inactive_camera_does_not_stop_capture(
     cameras.remove("gate", StubSession())
 
     assert stopped == []
+
+
+def test_a_task_without_a_camera_row_is_deletable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Exactly the report: the registry row was already gone, the console still listed the
+    # camera because its detection task remained, and the delete answered 404.
+    stopped: list[bool] = []
+    deleted_prompts = _stub_delete(monkeypatch, prompt_existed=True)
+    removed: list[str] = []
+    monkeypatch.setattr(camera_repository, "get_camera", lambda session, camera_id: None)
+    monkeypatch.setattr(runtime, "shutdown_pipeline", lambda: stopped.append(True))
+    monkeypatch.setattr(
+        camera_repository,
+        "delete_camera",
+        lambda session, camera_id: removed.append(camera_id) or True,
+    )
+
+    cameras.remove("orphan", StubSession())
+
+    assert deleted_prompts == ["orphan"]
+    assert removed == []  # nothing to delete in the registry
+    assert stopped == []  # and it was not the camera being captured
+
+
+def test_deleting_the_camera_that_is_capturing_stops_capture_even_if_inactive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A pipeline can be running on a camera whose row says inactive (a manual start, or a
+    # row that predates the activation flag). Deleting it must not leave capture orphaned.
+    stopped: list[bool] = []
+    _stub_delete(monkeypatch, prompt_existed=False)
+    monkeypatch.setattr(
+        camera_repository, "get_camera", lambda session, camera_id: _camera(active=False)
+    )
+    monkeypatch.setattr(
+        runtime,
+        "pipeline_status",
+        lambda: {"running": True, "pipeline": {"camera_id": "gate"}},
+    )
+    monkeypatch.setattr(runtime, "shutdown_pipeline", lambda: stopped.append(True))
+    monkeypatch.setattr(camera_repository, "delete_camera", lambda session, camera_id: True)
+
+    cameras.remove("gate", StubSession())
+
+    assert stopped == [True]
+
+
+def test_an_unknown_camera_is_a_404(monkeypatch: pytest.MonkeyPatch) -> None:
+    removed: list[str] = []
+    _stub_delete(monkeypatch, prompt_existed=False)
+    monkeypatch.setattr(camera_repository, "get_camera", lambda session, camera_id: None)
+    monkeypatch.setattr(
+        camera_repository,
+        "delete_camera",
+        lambda session, camera_id: removed.append(camera_id) or True,
+    )
+
+    with pytest.raises(HTTPException) as caught:
+        cameras.remove("ghost", StubSession())
+
+    assert caught.value.status_code == 404
+    assert "no camera 'ghost'" in str(caught.value.detail)
+    assert removed == []

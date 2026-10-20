@@ -46,6 +46,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from src.api import runtime
+from src.api.prompts import service as prompt_service
 from src.api.prompts.dependencies import get_db
 from src.api.storage import camera_repository
 from src.camera.credentials import CredentialError, CredentialVault
@@ -270,14 +271,31 @@ def activate(camera_id: str, session: Session = Depends(get_db)) -> dict:
 
 @router.delete("/{camera_id}", status_code=status.HTTP_204_NO_CONTENT)
 def remove(camera_id: str, session: Session = Depends(get_db)) -> None:
-    """Forget a camera. Deleting the active one stops capture rather than leaving it orphaned."""
+    """Forget a camera *and* its detection task.
+
+    The console lists the union of registered cameras and configured tasks, so deleting
+    only the camera row leaves the entry on screen - built from the prompt - and the next
+    delete answers "no camera". Both rows go; an id that has neither is a 404.
+    """
     camera = camera_repository.get_camera(session, camera_id)
-    if camera is None:
+    had_prompt = prompt_service.delete_camera_prompt(session, camera_id)
+    if camera is None and not had_prompt:
         raise HTTPException(status_code=404, detail=f"no camera '{camera_id}'")
 
-    if camera.active:
+    # Deleting the active camera must stop capture rather than leave a pipeline pointed at
+    # a camera the database no longer knows; the registry watcher would not restart it.
+    if (camera is not None and camera.active) or _capturing_camera() == camera_id:
         runtime.shutdown_pipeline()
-    camera_repository.delete_camera(session, camera_id)
+    if camera is not None:
+        camera_repository.delete_camera(session, camera_id)
+
+
+def _capturing_camera() -> Optional[str]:
+    """The camera the running pipeline captures, or ``None``."""
+    status = runtime.pipeline_status()
+    if not status.get("running"):
+        return None
+    return (status.get("pipeline") or {}).get("camera_id")
 
 
 def _activate(camera, session: Session) -> dict:  # noqa: ANN001 - Camera

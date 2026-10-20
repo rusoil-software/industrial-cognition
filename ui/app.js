@@ -243,12 +243,15 @@ createApp({
     }
 
     async function deleteCamera(id) {
-      if (!window.confirm(`Remove camera ${id}? Its detection task is kept.`)) return;
+      if (!window.confirm(`Remove camera ${id} and its detection task?`)) return;
       deleting.value = id;
       try {
         await api(`/cameras/${encodeURIComponent(id)}`, { method: "DELETE" });
         flash(`camera ${id} removed`, "ok");
         tracks.value = [];
+        // Drop the row locally as well: a refresh that races the delete, or a list built
+        // from a leftover prompt, must not leave the entry on screen.
+        cameras.value = cameras.value.filter((entry) => entry.camera_id !== id);
         const wasSelected = cameraId.value === id;
         if (wasSelected) {
           // The registry stops capture when the active camera is deleted, so the console

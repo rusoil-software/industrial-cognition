@@ -26,8 +26,11 @@ spec:
             # console then survives a pod restart instead of reverting to CAMERA_SOURCE.
             - name: CAMERA_REGISTRY_WATCH
               value: "1"
-            # CPU inference is ~11 s/frame, so capture slowly and keep the window small.
+            # CPU inference is ~11 s/frame, so most captured frames are shed by the bounded
+            # in-flight window (PIPELINE_MAX_IN_FLIGHT). Capture faster than inference anyway:
+            # the console preview shows the newest frame, and 5 FPS is what makes it look
+            # like a live camera instead of a slideshow. Raise to 15-25 with a GPU.
             - name: CAMERA_FPS
-              value: "0.2"
+              value: "5"
             - name: PIPELINE_MAX_IN_FLIGHT
               value: "2"

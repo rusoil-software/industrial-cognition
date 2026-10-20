@@ -19,6 +19,8 @@
 
 from __future__ import annotations
 
+import cv2
+import numpy as np
 import pytest
 
 from src.camera.capture import CaptureConfig, DeviceFrameSource
@@ -92,3 +94,50 @@ def test_surrounding_whitespace_is_trimmed_from_a_url():
 def test_an_empty_source_is_a_configuration_error(source):
     with pytest.raises(ValueError, match="empty"):
         build_frame_source(source, config())
+
+
+def _write_still(path):
+    # A white square on black is all the pan needs: the centroid of the bright pixels is
+    # the offset of the frame, so sub-pixel accuracy is not required.
+    image = np.zeros((60, 80, 3), np.uint8)
+    image[20:40, 30:50] = 255
+    assert cv2.imwrite(str(path), image)
+    return path
+
+
+def _centroid(frame):
+    columns = np.nonzero(frame[:, :, 0] > 128)[1]
+    assert columns.size, "the still should still be in frame"
+    return float(columns.mean())
+
+
+def test_a_replay_source_pans_so_the_console_shows_movement(tmp_path):
+    # The user's complaint was literal: one frame per 10 s, so movement did not exist.
+    # A still image published as a camera now pans across its amplitude once per period.
+    source = ReplayFrameSource(_write_still(tmp_path / "still.png"), drift_pixels=12)
+    assert source.open()
+
+    frames = [source.read() for _ in range(ReplayFrameSource.PAN_PERIOD_FRAMES)]
+
+    assert not np.array_equal(frames[0], frames[1])
+    # The pan reaches its extremes a quarter of a period apart, 12 px each way.
+    assert abs(_centroid(frames[ReplayFrameSource.PAN_PERIOD_FRAMES // 4]) - _centroid(frames[0])) >= 11.0
+
+
+def test_a_replay_source_pans_visibly_by_default(tmp_path):
+    # The default amplitude has to be big enough to see in a 640-960 px preview; 2 px was
+    # not, which is part of why the console looked frozen.
+    source = ReplayFrameSource(_write_still(tmp_path / "still.png"))
+    assert source.open()
+
+    frames = [source.read() for _ in range(ReplayFrameSource.PAN_PERIOD_FRAMES)]
+
+    assert max(abs(_centroid(frame) - _centroid(frames[0])) for frame in frames) >= 20.0
+
+
+def test_a_replay_source_without_drift_repeats_the_still(tmp_path):
+    source = ReplayFrameSource(_write_still(tmp_path / "still.png"), drift_pixels=0)
+    assert source.open()
+
+    assert np.array_equal(source.read(), source.read())
+

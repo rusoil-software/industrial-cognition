@@ -266,15 +266,26 @@ not in the original 13.*
   failures it used to conflate: `last frame 12.4s ago` is a silent **camera**, `0 client(s)`
   with `last frame 0.1s ago` is just nobody watching, and each client gets its own line.
 * **No way to remove a camera.** `delete` per row in the sources panel calls the existing
-  `DELETE /cameras/{id}`; it stops capture when the camera is active, keeps the detection
-  task (re-registering the id brings it back), and clears the stream so a deleted camera does
-  not keep showing its last frame.
+  `DELETE /cameras/{id}`; it deletes the registered row *and* the detection task, stops
+  capture when the camera is active (or is the one being captured), and clears the stream so
+  a deleted camera does not keep showing its last frame. Front end and back end were both
+  fixed for the follow-up report that entries survived deletion ("they remain after
+  deletion and when attempted to delete again, it says 'no camera'"): `GET /cameras` lists
+  the union of registry rows and tasks, so the delete has to remove both - and the console
+  now drops the row locally on success instead of waiting for a refresh.
 * **A frozen snapshot looked live.** The preview is now a real stream at `STREAM_FPS` (10)
   that ends after `STREAM_IDLE_TIMEOUT` (15 s) without a new frame, and the top bar carries a
   live badge fed by `/status` every 2 s: `live · 0.4s`, `stale · 12.1s`, `camera offline`,
   `waiting for a frame`, `capturing another camera`. The staleness budget is cadence-aware
   (`max(5 s, 3 intervals)`), so a 0.2 FPS dev replay is not called dead. `/cameras` entries
   carry `last_frame_age_seconds` and `streaming`.
+* **"One frame in more than 10 seconds, so the movement practically does not exist."** A live
+  badge does not make a slideshow watchable: the dev capture cadence was `CAMERA_FPS=0.2`
+  (5 s per frame) and the replay source drifted by ±2 px, invisible at 640×960. The dev
+  overlay now captures at 5 FPS and `ReplayFrameSource` pans 24 px with a 60-frame period
+  (`drift_pixels`, `PAN_PERIOD_FRAMES`), so consecutive frames differ visibly while the
+  bounded in-flight window keeps shedding the surplus. Inference latency is unchanged; what
+  changes is that the preview is 5 FPS and a still image looks like a slow pan.
 * **Boxes moved once per inference.** On CPU that is once per ~11 s, so a walking worker's
   box teleported. `src/vision/tracking.py` seeds one OpenCV tracker per detection and
   advances them at `TRACK_FPS` (10) between inferences, publishing
