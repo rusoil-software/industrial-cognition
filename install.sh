@@ -101,6 +101,38 @@ fi
   then re-run ./install.sh.  ./scripts/cluster-doctor.ps1 -Fix diagnoses this on Windows."
 printf '    %s\n' "${default_sc}"
 
+# Credentials are generated, never committed. Generated once per checkout: re-running must
+# not rotate an existing file, because the database password inside Postgres would not change
+# with it and the pods would simply stop connecting.
+ensure_secrets() {
+    local target="${REPO_ROOT}/k8s/base/secrets.env"
+    local example="${REPO_ROOT}/k8s/base/secrets.env.example"
+    if [[ -f "${target}" ]]; then
+        printf '    k8s/base/secrets.env exists (left untouched)\n'
+        return 0
+    fi
+    [[ -f "${example}" ]] || die "k8s/base/secrets.env.example is missing"
+    local key value
+    : > "${target}"
+    while IFS= read -r line; do
+        if [[ "${line}" =~ ^([A-Z0-9_]+)= ]]; then
+            key="${BASH_REMATCH[1]}"
+            if [[ "${key}" =~ _(USER|DB|NAME|URL|KEY)$ && ! "${key}" =~ SECRET|PASS|TOKEN|COOKIE ]]; then
+                printf '%s\n' "${line}" >> "${target}"
+            else
+                value="$(head -c 24 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 32)"
+                printf '%s=%s\n' "${key}" "${value}" >> "${target}"
+            fi
+        else
+            printf '%s\n' "${line}" >> "${target}"
+        fi
+    done < "${example}"
+    printf '    generated k8s/base/secrets.env with random credentials\n'
+}
+
+step "credentials"
+ensure_secrets
+
 step "building and loading images"
 "${REPO_ROOT}/k8s/scripts/build-images.sh" --tag dev --load-minikube
 

@@ -142,7 +142,13 @@ diagnosis. `READY_REQUIRE_PIPELINE` selects the role: `1` on the camera Deployme
 and robot. The database is always required. Verified: `/readyz` 200 with
 `{"database": true, "pipeline": true}`, liveness still `/health`, readiness now `/readyz`.
 
-**6. &#9744; Harden auth before anything faces a network.**
+**6. &#9744; Harden auth before anything faces a network.** - partly done 2026-10-20
+Done: credentials are no longer committed (`secrets.env.example` is tracked, the real file is
+generated with random values by the installers and git-ignored); `DOCS_ENABLED=0` removes
+/docs, /redoc and /openapi.json in the prod overlay; `AUTH_COOKIE_SECURE=1` and a shorter
+`AUTH_TTL_SECONDS` are set there too. Remaining: per-user accounts and roles (today one shared
+deployment token), a login attempt throttle, and a rotation procedure that changes the database
+password on both sides at once.
 Dev credentials are committed in `k8s/base/secrets.env`; `AUTH_TOKEN`/`JWT_SECRET` must be
 rotated, `AUTH_COOKIE_SECURE=1` behind TLS, token lifetime decided, and `/docs` +
 `/openapi.json` closed in production. Today it is one shared deployment token - per-user
@@ -154,11 +160,14 @@ The dev overlay installs no ingress controller (NodePort 30080 is dev-only) and 
 references secret `industrial-cognition-tls` that nothing creates. Need cert-manager or a
 provided certificate, a real hostname, and probes that match item 5.
 
-**8. &#9744; Broker-side queue hygiene.**
-We observed a 41-message backlog and `queue_ms` of 353 s. The client sheds frames, but the broker
-does not: set `x-max-length` / message TTL on `vision` so stale frames die at the broker, and
-give `vision.dlq` a producer (it is declared and unused) plus a retry policy for
-genuinely-failed tasks.
+**8. &#9745; Broker-side queue hygiene.** - done 2026-10-20
+Both work queues now carry `x-max-length=256`, `x-overflow=drop-head`, a 60 s `x-message-ttl`
+and a dead-letter exchange. Queue arguments are immutable, so `scripts/queue-hygiene.sh --force`
+deletes them once and the consumers recreate them - verified live: `vision` carries all five
+arguments and `vision.priority` matches. The dead-letter queue needed an explicit
+`worker_ready` declaration because RabbitMQ drops messages dead-lettered into a missing
+exchange, silently; verified by letting a frame expire with no consumer: `vision` 2 -> 0 and
+`vision.dlq` 0 -> 3.
 
 **9. &#9744; Decide multi-camera shape.**
 The runner is one source per process; per-camera prompts already exist but queues, task routing

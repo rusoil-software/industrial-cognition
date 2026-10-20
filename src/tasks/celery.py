@@ -38,8 +38,8 @@ import os
 from typing import Any
 
 from celery import Celery
-from celery.signals import worker_process_init
-from kombu import Queue
+from celery.signals import worker_process_init, worker_ready
+from kombu import Exchange, Queue
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,44 @@ logger = logging.getLogger(__name__)
 # Kubernetes (ConfigMap/Secret-provided URLs - see k8s/base/app-config.yaml).
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "amqp://myuser:mypassword@rabbitmq:5672//")
 CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/0")
+
+#: Dead-letter exchange: expired work is routed here instead of vanishing silently.
+DEAD_LETTER_EXCHANGE = "vision.dlx"
+DEAD_LETTER_QUEUE = "vision.dlq"
+
+
+def _queue_arguments() -> dict:
+    """Broker-side limits for the work queue.
+
+    The dispatcher already sheds frames when its in-flight window is full, but that only
+    bounds *this* process. If no worker is consuming - all replicas busy, a crash loop, a
+    scale-to-zero - the broker keeps accepting and the queue grows without limit. That is
+    not hypothetical: a 41-message backlog produced `queue_ms` of 353 s, and every one of
+    those frames was worthless by the time it was analysed.
+
+    Two independent bounds, both cheap:
+
+    * ``x-max-length`` with ``x-overflow=drop-head`` keeps the newest N frames and discards
+      the oldest when full. For a real-time control loop that is the correct direction -
+      the newest frame is the one worth analysing.
+    * ``x-message-ttl`` expires anything older than T seconds, so a queue that drains after
+      a long stall does not deliver stale work. Expired messages are dead-lettered rather
+      than dropped, so the volume is visible instead of invisible.
+
+    Note that queue arguments are immutable in RabbitMQ: changing these values does not
+    alter an existing queue. `doc/k8s.md` documents the one-time recreation, and
+    `scripts/queue-hygiene.sh` performs it.
+    """
+    max_length = int(os.getenv("CELERY_QUEUE_MAX_LENGTH", "256"))
+    ttl_seconds = int(os.getenv("CELERY_QUEUE_TTL_SECONDS", "60"))
+    return {
+        "x-max-length": max_length,
+        "x-overflow": "drop-head",
+        "x-message-ttl": ttl_seconds * 1000,
+        "x-dead-letter-exchange": DEAD_LETTER_EXCHANGE,
+        "x-dead-letter-routing-key": DEAD_LETTER_QUEUE,
+    }
+
 
 #: Queue contract shared with the deployment manifests: the work queue, the
 #: priority queue for urgent frames, the results queue and the dead-letter queue.
@@ -67,6 +105,29 @@ CELERY_TASK_QUEUES = [
     )
     if name
 ]
+
+# The work queues carry the bounds; the dead-letter queue must not, or expired messages
+# would be dropped instead of retained for inspection.
+CELERY_TASK_QUEUES = [
+    Queue(
+        queue.name,
+        queue_arguments=_queue_arguments()
+        if queue.name in ("vision", "vision.priority")
+        else None,
+    )
+    for queue in CELERY_TASK_QUEUES
+]
+
+# The DLQ is declared against its own exchange so dead-lettered frames land somewhere that
+# can be listed, inspected and purged, rather than on the floor.
+CELERY_TASK_QUEUES.append(
+    Queue(
+        DEAD_LETTER_QUEUE,
+        exchange=Exchange(DEAD_LETTER_EXCHANGE, type="direct"),
+        routing_key=DEAD_LETTER_QUEUE,
+        durable=True,
+    )
+)
 
 celery_app = Celery(
     "tasks",
@@ -152,4 +213,26 @@ def _warm_vision_model(**_kwargs: Any) -> None:
     except Exception:  # noqa: BLE001 - see the docstring
         logger.exception(
             "vision backend warmup failed; tasks will fail until the model is available"
+        )
+
+
+@worker_ready.connect
+def _declare_dead_letter_queue(**_kwargs: Any) -> None:
+    """Create the dead-letter exchange and queue if they do not exist.
+
+    Putting ``x-dead-letter-exchange`` on the work queue does not create the target.
+    RabbitMQ accepts the argument and then drops messages when it tries to dead-letter into
+    an exchange that is not there - a silent failure, which is the worst kind for a queue
+    whose whole purpose is to make losses visible. Celery also never declares a queue it
+    does not consume from, so the DLQ has to be declared explicitly.
+    """
+    try:
+        with celery_app.connection_for_write() as connection:
+            queue = celery_app.amqp.queues[DEAD_LETTER_QUEUE]
+            queue.bind(connection.default_channel).declare()
+        logger.info("dead-letter queue %s declared", DEAD_LETTER_QUEUE)
+    except Exception:  # noqa: BLE001 - the worker must still start without a DLQ
+        logger.exception(
+            "could not declare the dead-letter queue; expired frames will be dropped "
+            "instead of retained"
         )

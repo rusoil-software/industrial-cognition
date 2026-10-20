@@ -74,8 +74,19 @@ data:
   CELERY_BROKER_URL: "amqp://cogni:cogni-dev-password@rabbitmq:5672//"
   CELERY_RESULT_BACKEND: "redis://redis:6379/0"
   CELERY_QUEUES: "vision,vision.priority,vision.results,vision.dlq"
+  # Broker-side bounds on the work queues (src/tasks/celery.py::_queue_arguments).
+  # The dispatcher already sheds frames when its own window is full, but that only bounds
+  # one process: with no consumer the queue grows without limit. Measured cost of getting
+  # this wrong: a 41-message backlog produced queue_ms of 353 s, all of it worthless.
+  # Queue arguments are immutable in RabbitMQ - changing these needs a one-time queue
+  # recreation (scripts/queue-hygiene.sh --force), not just a config change.
+  CELERY_QUEUE_MAX_LENGTH: "256"
+  CELERY_QUEUE_TTL_SECONDS: "60"
   CELERY_TASK_DEFAULT_QUEUE: "vision"
   CELERY_WORKER_PREFETCH_MULTIPLIER: "1"
+  # Session memory is per *process*: one ONNX session peaks at ~2 GiB (doc/vision-pipeline.md
+  # §16). Replicas x concurrency x 2 GiB is what the node must hold, so concurrency 2 across
+  # two replicas is already ~8 GiB of inference alone.
   CELERY_WORKER_CONCURRENCY: "2"
 
   # ------------------------------------------------------------ data endpoints

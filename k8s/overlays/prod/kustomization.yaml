@@ -93,3 +93,6 @@ patches:
   - path: patches/edge-devices.yaml
   # --- GPU inference -------------------------------------------------------
   - path: patches/vision-gpu.yaml
+  # --- Authentication hardening -------------------------------------------
+  # Docs off, HTTPS-only cookie, shorter session. See the patch header.
+  - path: patches/auth-hardening.yaml

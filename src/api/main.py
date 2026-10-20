@@ -82,11 +82,22 @@ async def lifespan(app: FastAPI):  # noqa: ARG001 - required signature
         runtime.shutdown_pipeline()
 
 
+# API documentation is a developer surface, not an operator one: /docs advertises every
+# endpoint and its schemas, and it is unauthenticated by design. Useful on a laptop, an
+# information leak on a network - so it is a switch, and the prod overlay turns it off.
+_docs_enabled = os.getenv("DOCS_ENABLED", "1").strip().lower() not in ("0", "false", "no")
+
 app = FastAPI(
     title="Industrial Cognition Core API",
     version="1.0.0",
     lifespan=lifespan,
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
 )
+
+if not _docs_enabled:
+    logger.info("API documentation disabled by DOCS_ENABLED=0")
 
 app.include_router(prompts_router)
 app.include_router(realtime_router)

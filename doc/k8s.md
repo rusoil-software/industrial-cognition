@@ -657,3 +657,67 @@ minikube start --driver=docker --memory=12288 --cpus=8
 A note on why this is a resource problem and not a code one: the stack runs Postgres,
 RabbitMQ, Redis, MinIO, the API, the vision worker and (in a full run) a 293 MiB ONNX
 model in one VM. 8 GiB is the practical floor; 12 GiB is comfortable.
+
+---
+
+## Queue hygiene: bounds, TTL and a real dead-letter queue
+
+The dispatcher sheds frames when *its own* in-flight window is full, but that bounds one
+process. With no consumer at all - every replica busy, a crash loop, a scale-to-zero - the
+broker keeps accepting and the queue grows without limit. Measured cost of getting this wrong:
+a 41-message backlog produced `queue_ms` of 353 s, and none of those frames was worth
+analysing by the time it was.
+
+`src/tasks/celery.py` now declares both work queues with:
+
+| Argument | Value | Why |
+| --- | --- | --- |
+| `x-max-length` | 256 | keeps the newest frames |
+| `x-overflow` | `drop-head` | discards the *oldest* when full - for a control loop the newest frame is the one worth analysing |
+| `x-message-ttl` | 60 s | a frame queued longer than that is stale by definition |
+| `x-dead-letter-exchange` | `vision.dlx` | so expiry is visible, not silent |
+
+**Queue arguments are immutable.** Adding them does nothing to an existing queue, and a
+worker that tries to redeclare it fails with `PRECONDITION_FAILED` (406). The queues must be
+deleted once so consumers recreate them:
+
+```sh
+./scripts/queue-hygiene.sh            # report the current arguments
+./scripts/queue-hygiene.sh --force    # delete; workers recreate on restart
+```
+
+The script is destructive on purpose and refuses without `--force`: deleting the work queue
+discards whatever is queued. For this pipeline that is acceptable - queued frames are stale by
+design - but it is a human decision, not something an installer should do silently.
+
+### The dead-letter queue had to be declared explicitly
+
+`x-dead-letter-exchange` on a queue does **not** create the target. RabbitMQ accepts the
+argument and then drops messages when it dead-letters into a missing exchange - a silent
+failure, which is the worst kind for a queue whose purpose is to make losses visible. Celery
+also never declares a queue it does not consume from. A `worker_ready` handler now declares
+`vision.dlx` / `vision.dlq` explicitly and logs it.
+
+Verified live: with no consumer, a published frame left `vision` at its 60 s TTL and
+**`vision.dlq` went from 0 to 3** (`vision` 2 -> 0). Expired work is now retained where it can
+be counted instead of evaporating.
+
+## Credentials are generated, not committed
+
+`k8s/base/secrets.env` used to be tracked, with the comment that it "ships development
+defaults". It also held `AUTH_TOKEN`, the single token that opens the operator console: a
+committed secret has been in every clone and every backup, and rotating it does not undo that.
+
+Now:
+
+* `k8s/base/secrets.env.example` is the tracked template.
+* `k8s/base/secrets.env` is git-ignored and created by `install.ps1` / `install.sh` from that
+  template with **random** values for every password and token, keeping identifiers (`*_USER`,
+  `*_DB`, `*_NAME`) stable because they appear in the manifests.
+* Generation happens only when the file is missing. Re-running the installer must not rotate an
+  existing file: changing `POSTGRES_PASSWORD` in the env does not change the password inside an
+  initialised database, so rotating it unattended breaks the cluster instead of securing it.
+  Rotation is therefore an operator action, and it has to move both sides at once.
+
+A fresh clone that runs `kubectl apply -k` without the installer now fails with a missing
+`secrets.env` - deliberately, and with the installer as the documented path.

@@ -84,6 +84,43 @@ function Fail([string]$Message, [string]$Hint = "") {
     exit 1
 }
 
+function Ensure-Secrets {
+    <#
+        Create k8s/base/secrets.env from the committed example with random values.
+
+        The real file is git-ignored: a committed credential has been in every clone and
+        every backup, and rotating it later does not undo that. Generated once per checkout;
+        re-running the installer never rotates existing values, because changing the
+        database password here would not change it inside the database itself and the pods
+        would simply stop connecting.
+    #>
+    $target = Join-Path $RepoRoot "k8s/base/secrets.env"
+    if (Test-Path $target) {
+        Ok "k8s/base/secrets.env exists (left untouched)"
+        return
+    }
+
+    $example = Join-Path $RepoRoot "k8s/base/secrets.env.example"
+    if (-not (Test-Path $example)) { Fail "k8s/base/secrets.env.example is missing" }
+
+    $random = { -join ((48..57) + (97..122) | Get-Random -Count 32 | ForEach-Object { [char]$_ }) }
+    $lines = foreach ($line in Get-Content $example) {
+        if ($line -match '^([A-Z0-9_]+)=') {
+            $key = $Matches[1]
+            # Keep identifiers stable (they appear in manifests); rotate every secret.
+            if ($key -match '_(USER|DB|NAME|URL|KEY)$' -and $key -notmatch 'SECRET|PASS|TOKEN|COOKIE') {
+                $line
+            } else {
+                "$key=$(& $random)"
+            }
+        } else {
+            $line
+        }
+    }
+    $lines | Set-Content -Path $target -Encoding utf8 -NoNewline:$false
+    Ok "generated k8s/base/secrets.env with random credentials"
+}
+
 function Invoke-Checked([string]$What, [scriptblock]$Action) {
     & $Action
     if ($LASTEXITCODE -ne 0) { Fail "$What failed (exit $LASTEXITCODE)" }
@@ -172,6 +209,9 @@ if (-not $SkipBuild) {
 # --------------------------------------------------------------------------- #
 # 4. deploy
 # --------------------------------------------------------------------------- #
+Step "credentials"
+Ensure-Secrets
+
 Step "applying k8s/overlays/$Overlay"
 Invoke-Checked "kubectl apply" {
     kubectl apply -k "k8s/overlays/$Overlay" --request-timeout=120s

@@ -1,0 +1,46 @@
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+#
+# Authentication settings for a deployment that faces a network.
+#
+# `DOCS_ENABLED=0` removes /docs, /redoc and /openapi.json. They are unauthenticated by
+# design and enumerate every endpoint and schema - a developer convenience that is an
+# information leak on a shared network.
+#
+# `AUTH_COOKIE_SECURE=1` makes the session cookie HTTPS-only. It must match how the
+# deployment is actually reached: with TLS terminated at the ingress (see ingress.yaml and
+# the industrial-cognition-tls secret) the browser only ever sends it over HTTPS, and a
+# cookie without this flag would also travel over a plain-HTTP origin if one existed.
+#
+# `AUTH_TTL_SECONDS=28800` shortens a session from 12 hours to 8. There is one shared
+# deployment token and no per-user revocation list, so a shorter lifetime is the only lever
+# that limits a leaked cookie.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: cogni-ns
+  name: api
+spec:
+  template:
+    spec:
+      containers:
+        - name: api
+          env:
+            - name: DOCS_ENABLED
+              value: "0"
+            - name: AUTH_COOKIE_SECURE
+              value: "1"
+            - name: AUTH_TTL_SECONDS
+              value: "28800"

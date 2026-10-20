@@ -40,11 +40,12 @@ output/
 # ImGui
 imgui.ini
 
-# Kubernetes: production secret overrides.
-# `k8s/base/secrets.env` ships development defaults and IS tracked; the overlay
-# copies that hold real credentials are not. See doc/k8s.md §5.
+# Kubernetes: credentials are generated, never committed.
+# `k8s/base/secrets.env.example` is the tracked template; `secrets.env` is created from it
+# by install.ps1 / install.sh with random values and stays on the machine that made it.
+# See doc/k8s.md §5.
 k8s/overlays/*/secrets.env
-!k8s/base/secrets.env
+k8s/base/secrets.env
 
 # Kubernetes: rendered manifests and local tool state
 k8s/**/*.rendered.yaml
