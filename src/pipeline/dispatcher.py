@@ -306,6 +306,30 @@ class FrameDispatcher:
                 error=f"transport: {type(exc).__name__}: {exc}",
             )
 
+        if not isinstance(payload, dict):
+            # Celery returns the *exception instance* as the result when a task failed and
+            # the caller did not ask for propagation. That is truthy, so it sails past the
+            # empty check below and `FrameResult.from_wire` then dies on `payload.get`.
+            # The AttributeError escaped `collect()` into the capture loop and killed the
+            # thread - live: "Exception in thread capture-main: 'FileNotFoundError' object
+            # has no attribute 'get'", with two frames stuck in flight forever.
+            self._stats.record_failure()
+            detail = (
+                f"{type(payload).__name__}: {payload}"
+                if isinstance(payload, BaseException)
+                else repr(payload)
+            )
+            logger.warning(
+                "task %s returned a non-result payload: %s", pending.handle.task_id, detail
+            )
+            return FrameResult(
+                camera_id=pending.frame.camera_id,
+                frame_number=pending.frame.frame_number,
+                capture_ts_ns=pending.frame.capture_ts_ns,
+                e2e_latency_ms=self._e2e_ms(pending),
+                error=f"worker: {detail}",
+            )
+
         if not payload:
             self._stats.record_failure()
             return FrameResult(

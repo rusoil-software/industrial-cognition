@@ -79,18 +79,18 @@ sheds frames with bounded latency otherwise, both asserted by tests.
 Ordered roughly by what blocks what. Items 1-3 are the ones we named; the rest are gaps this
 build exposed that will cost more to fix later than now.
 
-**1. &#9744; Put the model back on the PVC (and fix the loader pod first).**
-Recreating the cluster recreated `industrial-cognition-model-cache` empty, so `vision` sits at
-`0/1` with nothing to load - the console previews and edits tasks, but detects nothing.
-`k8s/tools/model-loader.yaml` runs as root with no seccomp profile and trips the
-`restricted:latest` PodSecurity warning on every use. Before repopulating:
-add `runAsNonRoot`, `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`,
-`seccompProfile: RuntimeDefault` and an `fsGroup` that can write the volume, then
-`kubectl cp` the artifact, verify it with `scripts/inspect_model.py`, and confirm one real
-inference with `scripts/smoke_inference.py`.
-*Done when:* `vision` is `1/1` and a task returns detections from the real model.
-*Note:* a fresh cluster is also a fresh database - prompts live in Postgres, so a cluster
-recreate silently loses them. Re-set them after recreating (or seed them in the installer).
+**1. &#9745; Put the model back on the PVC (and fix the loader pod first).** - done 2026-10-20
+`k8s/tools/model-loader.yaml` now satisfies PodSecurity `restricted`: `runAsNonRoot`,
+`allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`, `seccompProfile: RuntimeDefault`,
+a read-only root filesystem with an `emptyDir` at `/tmp` for tar, and `fsGroup: 1000` so the
+non-root user can write the volume. Without the `fsGroup` the copy fails only at the very end,
+after streaming 293 MB.
+Verified end to end: model and prompt copied through the loader (2.1 s), `vision` rolled out
+`1/1`, the worker loaded the artifact in 1.3 s and warmed in 10.8 s, a real inference returned
+sane logits at ~8.5 s/frame with 3434 MiB peak RSS, and the authenticated console path produced
+**4 detections on one frame `{cardboard box: 2, robot: 1, person: 1}`** with `queue_ms` 1.7 s.
+*Still to do:* seed the default prompt in the installer so a recreated cluster is not a fresh
+database with no cognition task.
 
 **2. &#9744; Make the Celery worker lean enough for two.**
 One resident ORT session peaks at **3432 MiB** (measured, `doc/vision-pipeline.md` §13); the dev
@@ -213,3 +213,16 @@ The artifact lives on a PVC and is copied by hand. Revisit together with the Min
   "Object storage (S3)".
 * 🔴 **RabbitMQ HA.** The broker is a replicated-single StatefulSet. True multi-node clustering needs the
   RabbitMQ Cluster Operator; see `doc/k8s.md` §2 "RabbitMQ clustering".
+
+### **Fixed while doing item 1**
+
+**Result handling in the dispatcher.** A lost or failed task surfaced as an *exception object*
+from Celery's `AsyncResult.result`. That object is truthy, so it passed the empty-result check and
+`FrameResult.from_wire` died on `payload.get` - and the `AttributeError` escaped `collect()` into
+the capture loop, killing the capture thread. The pod stayed `Running` with
+`pipeline.running: false`, two frames stuck in flight and no detections, which is exactly the kind
+of failure that looks like "the model is slow" from the outside. `_finalise` now recognises a
+non-dict payload and records it as a failure with the exception's type and message, and the
+runner guards dispatch and collection separately so an unexpected error costs one frame instead
+of the loop. `loop_errors` is exposed in `/status`, so "running but degrading" is visible.
+Two regression tests cover the exception object and an arbitrary string result.

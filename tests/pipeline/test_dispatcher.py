@@ -365,3 +365,42 @@ def test_a_lost_task_expires_instead_of_stalling_the_window() -> None:
     assert dispatcher.in_flight == 0, 'the lost task should have been dropped'
     assert stats.snapshot()['counters']['failed'] >= 1
     assert dispatcher.dispatch(make_frame(2)) is True, 'the window must free up'
+
+
+def test_an_exception_object_result_is_a_failure_not_a_crash() -> None:
+    """Celery returns the *exception instance* when a task failed.
+
+    That object is truthy, so it slipped past the empty-result check and reached
+    `FrameResult.from_wire`, which died on `payload.get`. The AttributeError escaped
+    `collect()` into the capture loop and killed the capture thread outright - observed
+    live as "Exception in thread capture-main: 'FileNotFoundError' object has no attribute
+    'get'", with frames stuck in flight.
+    """
+    transport = FakeTransport()
+    stats = PipelineStats()
+    dispatcher = FrameDispatcher(transport, stats, max_in_flight=2)
+
+    dispatcher.dispatch(make_frame(0))
+    transport.handles[0].fail(FileNotFoundError("model not found"))
+
+    results = dispatcher.collect()
+
+    assert len(results) == 1
+    assert results[0].error is not None
+    assert "FileNotFoundError" in results[0].error
+    assert stats.snapshot()["counters"]["failed"] == 1
+    assert dispatcher.in_flight == 0, "the frame must leave the window"
+
+
+def test_a_string_result_is_handled() -> None:
+    """Any non-dict result must degrade, never raise out of collect()."""
+    transport = FakeTransport()
+    dispatcher = FrameDispatcher(transport, PipelineStats(), max_in_flight=2)
+
+    dispatcher.dispatch(make_frame(0))
+    transport.handles[0].complete("not-a-dict")  # type: ignore[arg-type]
+
+    results = dispatcher.collect()
+
+    assert len(results) == 1
+    assert results[0].error is not None

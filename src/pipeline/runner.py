@@ -123,6 +123,10 @@ class PipelineRunner:
         self._prompt: Optional[Any] = None
         self._prompt_fetched_at = 0.0
         self._prompt_errors = 0
+        # Counts unexpected failures inside the loop that were survived. A non-zero value
+        # here with a healthy "running: true" means frames are being degraded - visible in
+        # /status instead of only in the log.
+        self._loop_errors = 0
         self._latest: Optional[LatestFrame] = None
         # Assignment of a whole immutable object is atomic enough: a reader sees
         # either the previous frame or the new one, never a half-written buffer.
@@ -220,11 +224,29 @@ class PipelineRunner:
                     )
                 self._stats.record_capture()
                 self._stats.record_encode(frame.encode_ms)
-                prompt = self._current_prompt(camera_id)
-                self._dispatcher.dispatch(frame, prompt=prompt)
 
-            for result in self._dispatcher.collect():
-                self._publish(result)
+                # Dispatch runs inside a guard because an unexpected failure here used to
+                # kill the capture thread outright - a non-dict task result did exactly
+                # that, stopping detection silently while the pod stayed "Running".
+                # Degrading one frame is always better than stopping the loop.
+                try:
+                    prompt = self._current_prompt(camera_id)
+                    self._dispatcher.dispatch(frame, prompt=prompt)
+                except Exception:  # noqa: BLE001 - see above
+                    self._loop_errors += 1
+                    logger.exception(
+                        "frame %s could not be dispatched; continuing",
+                        frame.frame_number,
+                    )
+
+            # Collection is guarded separately and runs even when capture failed, so a
+            # result already paid for is never abandoned because of an unrelated error.
+            try:
+                for result in self._dispatcher.collect():
+                    self._publish(result)
+            except Exception:  # noqa: BLE001 - see above
+                self._loop_errors += 1
+                logger.exception("could not collect results; continuing")
 
             frame_number += 1
             next_at += interval
@@ -282,6 +304,7 @@ class PipelineRunner:
             "broadcast": self._broadcaster.stats(),
             "in_flight": self._dispatcher.in_flight,
             "prompt_errors": self._prompt_errors,
+            "loop_errors": self._loop_errors,
             "prompt_loaded": self._prompt is not None,
             "server_time_ns": now_ns(),
         }

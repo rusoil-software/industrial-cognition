@@ -15,18 +15,19 @@
 #
 # Temporary pod used to populate the `model-cache` PVC.
 #
-# The vision Deployment mounts that PVC readOnly (correctly - a serving container
-# has no business writing its own model), so the artifact has to be placed by
-# something that mounts it read-write. This pod exists only for that, and is deleted
-# afterwards:
+# The vision Deployment mounts that PVC readOnly (correctly - a serving container has no
+# business writing its own model), so the artifact has to be placed by something that
+# mounts it read-write. This pod exists only for that, and is deleted afterwards:
 #
 #   kubectl apply -f k8s/tools/model-loader.yaml
 #   kubectl -n cogni-ns cp src/owl/models/cuda/owl2_model.onnx \
 #       model-loader:/models/owl2_model.onnx
+#   kubectl -n cogni-ns cp text_queries.json model-loader:/models/text_queries.json
 #   kubectl -n cogni-ns delete pod model-loader
+#   kubectl -n cogni-ns rollout restart deploy/vision    # pick the artifact up
 #
-# In a real deployment the artifact would arrive from object storage (MinIO) or a
-# baked image, not from a workstation; see doc/vision-pipeline.md §6.
+# In a real deployment the artifact would arrive from object storage (MinIO) or a baked
+# image, not from a workstation; see doc/vision-pipeline.md §6.
 
 apiVersion: v1
 kind: Pod
@@ -39,13 +40,38 @@ metadata:
 spec:
   restartPolicy: Never
   # Never schedule this next to the vision worker's GPU request in production.
+  #
+  # Security context: the namespace enforces PodSecurity `restricted`, and this pod used
+  # to trip a warning on every use - running as root, no seccomp profile, unrestricted
+  # capabilities. Being an operator tool is not a reason to leave a root container that
+  # code can be copied into. `fsGroup` is the piece that matters in practice: the
+  # provisioner creates the volume directory root-owned, so without a group with write
+  # access the copy fails with "Permission denied" only at the very end, after streaming
+  # 293 MB.
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    fsGroupChangePolicy: OnRootMismatch
+    seccompProfile:
+      type: RuntimeDefault
   containers:
     - name: model-loader
       image: python:3.11-slim
       command: ["sleep", "3600"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
       volumeMounts:
         - name: model-cache
           mountPath: /models
+        # `kubectl cp` streams a tar through the container, and tar wants a writable /tmp
+        # even when the root filesystem is read-only.
+        - name: tmp
+          mountPath: /tmp
       resources:
         requests:
           cpu: 100m
@@ -57,3 +83,5 @@ spec:
     - name: model-cache
       persistentVolumeClaim:
         claimName: industrial-cognition-model-cache
+    - name: tmp
+      emptyDir: {}
