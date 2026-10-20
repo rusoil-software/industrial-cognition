@@ -40,7 +40,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response, status
 from fastapi.staticfiles import StaticFiles
 
 from src.api import runtime
@@ -152,3 +152,48 @@ def health() -> dict:
 def status() -> dict:
     """Detailed pipeline, throughput and fan-out snapshot."""
     return runtime.pipeline_status()
+
+
+@app.get("/readyz", tags=["Health"], response_model=None)
+def readyz(response: Response) -> dict:
+    """Should traffic be sent to this pod right now?
+
+    Distinct from `/health`, which only says the process is alive. The decision depends on
+    the pod's role: a capture pod that cannot capture is useless, while the API stays
+    useful - it serves the console, prompts and history, including the page that explains
+    what is wrong. `READY_REQUIRE_PIPELINE` selects which role this pod plays.
+
+    Returns 503 when not ready, so a probe acts on it without parsing the body.
+    """
+    from src.api.readiness import evaluate_readiness
+
+    try:
+        from src.api.prompts.dependencies import get_session_factory
+        from sqlalchemy import text
+
+        session = get_session_factory()()
+        try:
+            session.execute(text("select 1"))
+            database_ok = True
+        finally:
+            session.close()
+    except Exception:  # noqa: BLE001 - unreachable database is a readiness answer
+        logger.exception("readiness probe could not reach the database")
+        database_ok = False
+
+    pipeline = runtime.pipeline_status()
+    require_pipeline = os.getenv("READY_REQUIRE_PIPELINE", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+    decision = evaluate_readiness(
+        database_ok=database_ok,
+        pipeline_running=bool(pipeline.get("running")),
+        require_pipeline=require_pipeline,
+        pipeline_reason=pipeline.get("reason"),
+    )
+    if not decision.ready:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    return decision.to_dict()

@@ -103,11 +103,16 @@ class PipelineRunner:
         *,
         broadcaster: Optional[ResultBroadcaster] = None,
         prompt_provider: Optional[Callable[[str], Optional[Any]]] = None,
+        sink: Optional[Callable[[Any], bool]] = None,
     ) -> None:
         self._source = source
         self._config = config or RunnerConfig()
         self._broadcaster = broadcaster or ResultBroadcaster()
         self._prompt_provider = prompt_provider
+        # Called for every completed frame after fan-out: the persistence policy decides
+        # whether it becomes a row. Injected as a callable so `src/pipeline` stays free of
+        # SQLAlchemy, and optional so tests and the smoke scripts run without a database.
+        self._sink = sink
         self._stats = PipelineStats(
             camera_id=self._config.capture.camera_id,
             window_seconds=max(1.0, float(self._config.target_fps)),
@@ -284,11 +289,23 @@ class PipelineRunner:
 
     # -- output ------------------------------------------------------------
     def _publish(self, result: Any) -> None:
-        """Hand a result to the broadcaster in the API-shaped envelope."""
+        """Hand a result to the broadcaster, then offer it to the persistence sink."""
         try:
             self._broadcaster.publish(result.to_payload())
         except Exception:  # noqa: BLE001 - a consumer must not kill the loop
             logger.exception("failed to publish frame %s", getattr(result, "frame_number", "?"))
+
+        # Fan-out first and persistence second: a slow or failing database must not delay
+        # the live view, which is the operator's primary signal. The sink enforces its own
+        # sampling and never raises, so one lost row cannot stop the loop.
+        if self._sink is not None:
+            try:
+                self._sink(result)
+            except Exception:  # noqa: BLE001 - belt and braces around a third-party writer
+                logger.exception(
+                    "detection sink failed for frame %s",
+                    getattr(result, "frame_number", "?"),
+                )
 
     # -- introspection -----------------------------------------------------
     def latest_frame(self) -> Optional[LatestFrame]:
@@ -306,5 +323,10 @@ class PipelineRunner:
             "prompt_errors": self._prompt_errors,
             "loop_errors": self._loop_errors,
             "prompt_loaded": self._prompt is not None,
+            "persistence": (
+                self._sink.snapshot()
+                if self._sink is not None and hasattr(self._sink, "snapshot")
+                else {"enabled": False}
+            ),
             "server_time_ns": now_ns(),
         }

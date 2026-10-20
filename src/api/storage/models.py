@@ -187,6 +187,23 @@ class DetectionResult(Base):
         doc="Sequential frame counter from the camera service. Not unique: two "
         "objects in one frame share it.",
     )
+    camera_id: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        nullable=True,
+        doc="Which camera produced the frame. Nullable because rows written before "
+        "this column existed have no camera; every new row sets it. Kept as a real "
+        "column rather than metadata because 'the last hour for camera X' is the "
+        "primary history query and JSONB is not indexable for it.",
+    )
+    label: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        nullable=True,
+        doc="The prompt label exactly as the System User typed it. `object_type` is "
+        "the coarse persisted category and its enum predates free-form prompts, so a "
+        "camera asking for 'robot' or 'person' stores those here and falls back to a "
+        "generic object_type. Without this column, persistence would simply fail for "
+        "every label outside the four-value enum.",
+    )
     object_type: Mapped[ObjectType] = mapped_column(
         _enum(ObjectType, "object_type"),
         nullable=False,
@@ -219,6 +236,8 @@ class DetectionResult(Base):
         # The two documented access patterns: time-range history and per-type
         # history ("last 30 days of metal_sheet").
         Index("ix_detection_results_type_timestamp", "object_type", "timestamp"),
+        # Per-camera history is the query the console and Stage 3 analytics need.
+        Index("ix_detection_results_camera_timestamp", "camera_id", "timestamp"),
     )
 
 

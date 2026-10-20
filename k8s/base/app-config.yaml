@@ -60,6 +60,15 @@ data:
   VISION_MAX_DETECTIONS: "32"
   VISION_LABELS: "metal_sheet"
 
+  # ------------------------------------------------------- detection persistence
+  # Consumed by src/api/detection_sink.py. Sampled on purpose: 60 FPS per camera is not a
+  # write rate a database should absorb, and most frames say the same thing. This is
+  # history for the console and for Stage 3 analytics, not an audit log - an event shorter
+  # than the interval can be missed.
+  PERSIST_DETECTIONS: "1"
+  PERSIST_MIN_INTERVAL_SECONDS: "1.0"
+  PERSIST_ONLY_DETECTIONS: "1"
+
   # ------------------------------------------------------------- async pipeline
   # Consumed by src/tasks/celery.py.
   CELERY_BROKER_URL: "amqp://cogni:cogni-dev-password@rabbitmq:5672//"

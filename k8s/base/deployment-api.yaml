@@ -87,6 +87,9 @@ spec:
             - configMapRef:
                 name: industrial-cognition-config
           env:
+            # Does this pod need capture running to be useful? 0 = serving role.
+            - name: READY_REQUIRE_PIPELINE
+              value: "0"
             - name: AUTH_TOKEN
               valueFrom:
                 secretKeyRef: { name: industrial-cognition-secrets, key: AUTH_TOKEN }
@@ -142,7 +145,7 @@ spec:
             timeoutSeconds: 5
             failureThreshold: 3
           readinessProbe:
-            httpGet: { path: /health, port: http }
+            httpGet: { path: /readyz, port: http }
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 3

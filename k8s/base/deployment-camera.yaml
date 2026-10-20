@@ -83,6 +83,9 @@ spec:
             - configMapRef:
                 name: industrial-cognition-config
           env:
+            # Does this pod need capture running to be useful? 1 = capture role.
+            - name: READY_REQUIRE_PIPELINE
+              value: "1"
             - name: REDIS_PASSWORD
               valueFrom:
                 secretKeyRef: { name: industrial-cognition-secrets, key: REDIS_PASSWORD }
@@ -134,7 +137,7 @@ spec:
             timeoutSeconds: 5
             failureThreshold: 3
           readinessProbe:
-            httpGet: { path: /health, port: http }
+            httpGet: { path: /readyz, port: http }
             initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 3

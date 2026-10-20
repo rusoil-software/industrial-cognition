@@ -193,3 +193,31 @@ production images install it. It excludes `dev.txt`, `export.txt` and `k8s.txt`
 tiers. The two serving images still differ in exactly one respect: `api` installs
 `onnxruntime` (CPU) while `vision` installs `onnxruntime-gpu`; those two ship the
 same import package and cannot coexist in one environment. See `doc/k8s.md` §2.
+
+---
+
+## Detection history: `camera_id` and `label`
+
+Migration `c4e7a1f90b12` added two columns to `detection_results`, both nullable so the change
+is additive:
+
+| Column | Why |
+| --- | --- |
+| `camera_id` (varchar 64) | "the last hour for camera X" is the primary history query, and JSONB metadata cannot be indexed for it. Composite index with `timestamp`. |
+| `label` (varchar 64) | The prompt text exactly as the operator typed it. |
+
+`label` exists because `object_type` is a four-value PostgreSQL enum (`metal_sheet`, `detail`,
+`debris`, `clutter`) written before prompts were free-form. Persisting "robot" or "person" into
+that column raises, so the repository keeps the coarse category (`coerce_object_type` maps
+unknown labels to `clutter`) and stores the real label separately.
+
+**Consequence worth knowing:** with the current prompt vocabulary, `object_type` is almost
+always `clutter`. Queries should use `label`. Growing the enum (robot, person, …) is a
+migration and a domain decision, not a code tweak.
+
+### Retention
+
+Nothing prunes `detection_results` yet. Persistence is sampled (one frame per camera per
+second, and only frames with detections), so the growth rate is bounded by ~86k frames/day per
+camera rather than by frame rate, but an unbounded table is still an unbounded table. A
+retention job belongs with the observability work in Stage 3.

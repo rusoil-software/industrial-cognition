@@ -69,6 +69,60 @@ def _capture_config():  # noqa: ANN202
     )
 
 
+def _write_detections(result) -> int:
+    """Persist one frame's detections using a short-lived session.
+
+    A session per write, like the prompt provider: the capture thread has no request scope
+    and holding a connection open between frames (seconds apart) would idle in the pool for
+    no reason.
+    """
+    from src.api.prompts.dependencies import get_session_factory
+    from src.api.storage import detection_repository
+
+    session = get_session_factory()()
+    try:
+        rows = detection_repository.save_detections(
+            session,
+            camera_id=result.camera_id,
+            frame_id=result.frame_number,
+            detections=result.detections,
+            context={
+                "worker_id": result.worker_id,
+                "queue_ms": round(result.queue_ms, 3),
+                "e2e_latency_ms": round(result.e2e_latency_ms, 3),
+                "inference_ms": round(result.timings.inference_ms, 3),
+            },
+        )
+        session.commit()
+        return rows
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+def _build_sink():
+    """The persistence policy, or ``None`` when disabled.
+
+    Downsampled on purpose: 60 FPS per camera is not a write rate a database should absorb,
+    and most frames say the same thing. PERSIST_MIN_INTERVAL_SECONDS bounds the rate
+    independently of capture rate; see `src/api/detection_sink.py`.
+    """
+    if os.getenv("PERSIST_DETECTIONS", "1").strip().lower() in ("0", "false", "no"):
+        logger.info("detection persistence disabled by PERSIST_DETECTIONS=0")
+        return None
+
+    from src.api.detection_sink import DetectionSink
+
+    return DetectionSink(
+        writer=_write_detections,
+        min_interval_seconds=float(os.getenv("PERSIST_MIN_INTERVAL_SECONDS", "1.0")),
+        only_with_detections=os.getenv("PERSIST_ONLY_DETECTIONS", "1").strip().lower()
+        not in ("0", "false", "no"),
+    )
+
+
 def _prompt_provider(camera_id: str):
     """Read one camera's stored prompt using a short-lived session.
 
@@ -113,6 +167,7 @@ def start_pipeline() -> bool:
             CeleryTransport(),
             config,
             prompt_provider=_prompt_provider,
+            sink=_build_sink(),
         )
         if not runner.start():
             _START_ERROR = "capture source could not be opened"

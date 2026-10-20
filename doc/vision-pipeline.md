@@ -608,3 +608,26 @@ Not pursued, because two is enough for the MVP and the cheap levers are exhauste
 the worker image is 1.55 GB (`onnxruntime-gpu` dominates and is required for the GPU path), and
 the remaining large win is architectural - one inference service holding the model once, with
 Celery workers as thin clients, instead of one model per replica.
+
+---
+
+## 17. Persisting history, and honest readiness
+
+Detections used to exist only as WebSocket messages. The capture loop now offers every
+completed frame to `src/api/detection_sink.py`, which applies the sampling policy and, when it
+says yes, calls `src/api/storage/detection_repository.py`. The sink is injected into the runner
+as a callable, so `src/pipeline` still has no SQLAlchemy import.
+
+Sampling rules, in order: a failed frame is never persisted; a frame with no detections is
+skipped by default; at most one frame per camera per `PERSIST_MIN_INTERVAL_SECONDS` (1 s).
+That bounds writes independently of capture rate - 60 FPS becomes 1 write/s per camera - and
+the policy is honest about being downsampling rather than an audit log.
+
+The sink runs **after** fan-out, so a slow database delays history rather than the live view,
+and it never raises: a database outage degrades history while detection continues. Counters are
+in `/status` under `persistence`.
+
+Readiness is separate from liveness (§5 of the backlog): `/health` stays 200 whenever the
+process is alive, `/readyz` decides whether traffic should arrive, parameterised by the pod's
+role through `READY_REQUIRE_PIPELINE`. A camera pod without capture leaves the endpoints; the
+API stays, because it serves the page that explains the fault.

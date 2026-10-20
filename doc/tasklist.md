@@ -115,16 +115,32 @@ below 90% of the request; add a `scripts/probe_camera.py` that lists devices, fo
 achievable FPS so this is diagnosable rather than guesswork.
 *Done when:* real frames reach the console with overlays, at a documented resolution/FPS.
 
-**4. &#9744; Persist detections.**
-`detection_results` and its ORM exist, but nothing writes to them: results only go out over the
-WebSocket. Stage 3 history and analytics need a writer with a retention policy, and at 60 FPS a
-sampling rule (per class, per camera, or on change) rather than one row per frame.
+**4. &#9745; Persist detections.** - done 2026-10-20
+The table existed and nothing wrote to it. Now the capture loop hands every completed frame
+to `src/api/detection_sink.py`, which decides whether it becomes rows; the writer is
+`src/api/storage/detection_repository.py`. Sampling is deliberate and documented: failed
+frames never persist, empty frames are skipped by default, and at most one frame per camera
+per `PERSIST_MIN_INTERVAL_SECONDS` (1 s) - 60 FPS would otherwise be a disk-filling bug, and
+most frames say the same thing. This is *history*, not an audit log; an event shorter than
+the interval can be missed.
+Two schema gaps had to be closed first, with migration `c4e7a1f90b12`: `object_type` is a
+four-value enum (`metal_sheet`, `detail`, `debris`, `clutter`) that predates free-form prompts,
+so new `label` (the operator's text) and `camera_id` (indexed with `timestamp`) columns were
+added. Verified live: 27 rows for camera `main` with `label` values `robot`, `person`,
+`cardboard box`, coordinates, confidences and frame ids preserved.
+*Follow-up found while verifying:* because none of those labels are enum members, every row
+stores `object_type = clutter`. Either the enum grows robot/person (a migration) or queries
+should use `label`; today the enum carries almost no information. Capture also needs a
+retention policy - nothing prunes rows yet.
 
-**5. &#9744; Make readiness honest.**
-`/health` returns 200 with `pipeline_running: false`, so Kubernetes reports the API ready while
-detection is degraded - the console can look "up" with a dead pipeline. Split liveness
-(`/health`) from readiness (`/readyz`, which fails when capture is expected but not running) and
-decide per deployment what "ready" means (the API pod serves the UI *and* captures in dev).
+**5. &#9745; Make readiness honest.** - done 2026-10-20
+`/readyz` answers "should traffic come here", `/health` stays liveness. The policy is a pure
+function (`src/api/readiness.py`) parameterised by role, because the answer differs: a capture
+pod without capture is useless, while the API serves the console, prompts and history and
+holds the page that explains the fault - taking it out of the endpoints would hide the
+diagnosis. `READY_REQUIRE_PIPELINE` selects the role: `1` on the camera Deployment, `0` on API
+and robot. The database is always required. Verified: `/readyz` 200 with
+`{"database": true, "pipeline": true}`, liveness still `/health`, readiness now `/readyz`.
 
 **6. &#9744; Harden auth before anything faces a network.**
 Dev credentials are committed in `k8s/base/secrets.env`; `AUTH_TOKEN`/`JWT_SECRET` must be
