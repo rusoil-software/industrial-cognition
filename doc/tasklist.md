@@ -142,13 +142,16 @@ diagnosis. `READY_REQUIRE_PIPELINE` selects the role: `1` on the camera Deployme
 and robot. The database is always required. Verified: `/readyz` 200 with
 `{"database": true, "pipeline": true}`, liveness still `/health`, readiness now `/readyz`.
 
-**6. &#9744; Harden auth before anything faces a network.** - partly done 2026-10-20
+**6. &#9745; Harden auth before anything faces a network.** - done 2026-10-20
 Done: credentials are no longer committed (`secrets.env.example` is tracked, the real file is
 generated with random values by the installers and git-ignored); `DOCS_ENABLED=0` removes
 /docs, /redoc and /openapi.json in the prod overlay; `AUTH_COOKIE_SECURE=1` and a shorter
-`AUTH_TTL_SECONDS` are set there too. Remaining: per-user accounts and roles (today one shared
-deployment token), a login attempt throttle, and a rotation procedure that changes the database
-password on both sides at once.
+`AUTH_TTL_SECONDS` are set there too. A login throttle now blocks a caller after `AUTH_MAX_FAILURES` (5) failed attempts for
+`AUTH_LOCKOUT_SECONDS` (300), on both the POST and the token-in-URL form - verified live:
+4x401 then 429, and the correct token refused while locked. Its state is per process, so the
+effective limit multiplies by the replica count; that is documented rather than hidden.
+Remaining, not blocking: per-user accounts and roles (today one shared deployment token) and
+a rotation procedure that changes the database password on both sides at once.
 Dev credentials are committed in `k8s/base/secrets.env`; `AUTH_TOKEN`/`JWT_SECRET` must be
 rotated, `AUTH_COOKIE_SECURE=1` behind TLS, token lifetime decided, and `/docs` +
 `/openapi.json` closed in production. Today it is one shared deployment token - per-user
@@ -176,11 +179,13 @@ camera (simplest, needs per-camera services/ingress paths) or teach the runner m
 with per-camera windows and stats. Also per-camera `PIPELINE_MAX_IN_FLIGHT`, which must be sized
 from inference latency, not left at a default.
 
-**10. &#9744; Make the deployment itself testable in CI.**
-`tests/k8s` checks manifests, but nothing exercises auth, the stream endpoints or the WebSocket
-outside a manual `scripts/smoke_*.py` run. Promote `smoke_auth.py` and `smoke_ui.py` into a
-pytest-marked integration suite against kind/minikube, so the six-to-eight bugs each live run
-found would be caught automatically.
+**10. &#9745; Make the deployment itself testable in CI.** - done 2026-10-20
+`.github/workflows/ci.yml`: unit tests plus a compile-all pass and syntax checks for the
+PowerShell and shell entry points; a manifests job that renders dev/prod/tools, validates them
+with `kubeconform -strict` and runs the contract tests; and a manual cluster job that builds
+both images, deploys to kind, migrates through a Job and runs `scripts/smoke_auth.py`. The
+cluster job is gated because it takes minutes - it is the one that would have caught the auth,
+readiness and stream bugs found by hand.
 
 **11. &#9744; Detection quality beyond one photograph.**
 One Apache-2.0 image proves prompt conditioning; thresholds are still chosen from a handful of

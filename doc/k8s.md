@@ -721,3 +721,32 @@ Now:
 
 A fresh clone that runs `kubectl apply -k` without the installer now fails with a missing
 `secrets.env` - deliberately, and with the installer as the documented path.
+
+---
+
+## Scheduled maintenance
+
+`cronjob-retention.yaml` is the only CronJob: it prunes detection history daily
+(`python -m src.api.maintenance.retention`, `DETECTION_RETENTION_DAYS` default 30). It runs the
+API image - that image already carries SQLAlchemy, the driver and the module, so no new artifact
+is needed and the code under test is the code that runs.
+
+Choices worth knowing: `concurrencyPolicy: Forbid` so a slow prune cannot race the next one;
+`startingDeadlineSeconds: 3600` so a missed window is skipped rather than piled up;
+`ttlSecondsAfterFinished: 86400` so daily pods do not accumulate; and the usual restricted
+security context (`runAsNonRoot`, read-only root, `/tmp` emptyDir).
+
+## CI
+
+`.github/workflows/ci.yml` runs two jobs on every push and PR:
+
+* **unit** - `pytest tests` with the API requirement set (not `base.txt`, which pulls a GPU
+  stack), a compile-all pass, and *syntax checks for the PowerShell and shell entry points*.
+  Those scripts are what users actually run; a parse error there is invisible until it is hit.
+* **manifests** - renders dev, prod and tools with `kubectl kustomize`, validates them with
+  `kubeconform -strict`, then runs the manifest contract tests.
+
+A third job, **cluster**, is manual (`workflow_dispatch`): it builds both images, starts kind,
+deploys, migrates through a Job and runs `scripts/smoke_auth.py` against the real surface. It is
+gated because it takes minutes, not seconds - but it is the only job that would have caught the
+auth, readiness and stream bugs found by hand.

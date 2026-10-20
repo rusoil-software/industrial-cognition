@@ -68,6 +68,10 @@ data:
   PERSIST_DETECTIONS: "1"
   PERSIST_MIN_INTERVAL_SECONDS: "1.0"
   PERSIST_ONLY_DETECTIONS: "1"
+# How much history the daily CronJob keeps (src/api/maintenance/retention.py).
+# Sampled persistence bounds the write rate, not the total: an unbounded table is
+# still unbounded on a line that runs for months.
+  DETECTION_RETENTION_DAYS: "30"
 
   # ------------------------------------------------------------- async pipeline
   # Consumed by src/tasks/celery.py.

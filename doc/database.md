@@ -217,7 +217,15 @@ migration and a domain decision, not a code tweak.
 
 ### Retention
 
-Nothing prunes `detection_results` yet. Persistence is sampled (one frame per camera per
-second, and only frames with detections), so the growth rate is bounded by ~86k frames/day per
-camera rather than by frame rate, but an unbounded table is still an unbounded table. A
-retention job belongs with the observability work in Stage 3.
+`k8s/base/cronjob-retention.yaml` prunes history daily at 03:17 UTC with
+`python -m src.api.maintenance.retention`. Default window: `DETECTION_RETENTION_DAYS=30`.
+
+Sampling bounds the *rate* of growth; only deletion bounds the total. The pruner deletes in
+batches of `DETECTION_RETENTION_BATCH` (default 5000) and commits between them, because one
+`DELETE` over millions of rows holds locks and WAL for the whole prune and can stall the writer
+persisting live frames.
+
+The rule that decides which rows are old lives in `src/api/maintenance/policy.py` and is a pure
+function, so the off-by-one is covered by tests that need no database. Verified live: a
+`--dry-run --days 0` reported 546 rows and a real prune removed 546, leaving 0; the CronJob's own
+pod then ran with the 30-day window and removed 0, under a restricted security context.

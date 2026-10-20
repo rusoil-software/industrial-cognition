@@ -1,0 +1,197 @@
+# Copyright (c), The Rusoil Software Development Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# ==============================================================================
+#
+# Continuous integration for the parts that keep breaking.
+#
+# The last few sessions found bugs in three distinct places, and each job below exists because
+# one of them got through:
+#
+#   unit       - a lost task result killed the capture thread; the dispatcher now has tests.
+#   manifests  - kustomize renders, probe paths, labels, and the contract tests in tests/k8s.
+#   cluster    - the deployment surface: auth, readiness, streams, the WebSocket. This one is
+#                deliberately manual (workflow_dispatch) because it builds images and starts a
+#                kind cluster, which is minutes not seconds. Run it before a release.
+#
+# Windows script syntax is checked too: install.ps1 and console.ps1 are what users actually run,
+# and a PowerShell parse error is invisible until someone hits it.
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.11"
+  # Tests that need the 293 MiB ONNX artifact are marked `model` and excluded here: the
+  # artifact is not in version control.
+  PYTEST_IGNORE: "--ignore=tests/owl --ignore=tests/integration --ignore=tests/vision/test_detection_quality.py"
+
+jobs:
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          # The API requirement set, not base.txt: base pulls tensorrt and a GPU stack that a
+          # runner does not have, and the tests do not need inference.
+          pip install -r requirements/api.txt
+          pip install pytest pyyaml
+
+      - name: Unit tests
+        run: pytest tests -q -p no:cacheprovider $PYTEST_IGNORE
+
+      - name: Compile every module
+        run: python -m compileall -q src scripts
+
+      - name: PowerShell scripts parse
+        # `pwsh` is preinstalled on ubuntu-latest. install.ps1 and console.ps1 are the entry
+        # points on Windows; a parse error there is a broken product.
+        run: |
+          pwsh -NoProfile -Command '
+            foreach ($file in @("install.ps1", "scripts/console.ps1", "scripts/cluster-doctor.ps1")) {
+              $errors = $null
+              [void][System.Management.Automation.Language.Parser]::ParseFile(
+                (Resolve-Path $file), [ref]$null, [ref]$errors)
+              if ($errors) { Write-Error "$file: $($errors[0].Message)"; exit 1 }
+              Write-Host "$file parses"
+            }'
+
+      - name: Shell scripts parse
+        run: |
+          for script in install.sh scripts/*.sh; do
+            bash -n "${script}" || { echo "::error file=${script}::bash syntax error"; exit 1; }
+          done
+          echo "shell scripts parse"
+
+  manifests:
+    name: Manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: v1.31.0
+
+      - name: Install test dependencies
+        run: pip install pytest pyyaml
+
+      - name: Render every overlay
+        run: |
+          kubectl kustomize k8s/overlays/dev  > /tmp/dev.yaml
+          kubectl kustomize k8s/overlays/prod > /tmp/prod.yaml
+          kubectl kustomize k8s/tools       > /tmp/tools.yaml
+          wc -l /tmp/dev.yaml /tmp/prod.yaml /tmp/tools.yaml
+
+      - name: Validate against the Kubernetes schema
+        run: |
+          curl -sSLo kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
+          tar -xzf kubeconform.tar.gz kubeconform
+          ./kubeconform -strict -summary -ignore-missing-schemas /tmp/dev.yaml /tmp/prod.yaml
+
+      - name: Manifest contract tests
+        run: pytest tests/k8s -q -p no:cacheprovider
+
+  cluster:
+    name: Deployment surface (manual)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: v1.31.0
+
+      - name: Start a kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: cogni
+
+      - name: Build and load images
+        run: |
+          # No minikube here: with kind, the node uses the host's containerd image store, so a
+          # plain `docker build` is visible to the cluster.
+          docker build -f src/api/Dockerfile -t industrial-cognition/api:dev .
+          docker build -f src/vision/Dockerfile.worker -t industrial-cognition/vision:dev .
+          kind load docker-image industrial-cognition/api:dev --name cogni
+          kind load docker-image industrial-cognition/vision:dev --name cogni
+
+      - name: Generate credentials
+        # secrets.env is git-ignored by design; the installer normally writes it. In CI the
+        # example is enough - it is a throwaway cluster.
+        run: cp k8s/base/secrets.env.example k8s/base/secrets.env
+
+      - name: Deploy
+        run: |
+          kubectl apply -k k8s/overlays/dev
+          kubectl -n cogni-ns wait --for=condition=ready pod/postgres-0 --timeout=300s
+          kubectl -n cogni-ns rollout status deploy/api --timeout=420s
+
+      - name: Migrate
+        run: |
+          kubectl -n cogni-ns delete job alembic-migrate --ignore-not-found
+          kubectl -n cogni-ns create job alembic-migrate \
+            --image=industrial-cognition/api:dev \
+            --dry-run=client -o yaml > /tmp/migrate.yaml
+          python - <<'PY'
+          import yaml
+          job = yaml.safe_load(open("/tmp/migrate.yaml"))
+          spec = job["spec"]["template"]["spec"]
+          container = spec["containers"][0]
+          container["command"] = ["alembic", "upgrade", "head"]
+          container["imagePullPolicy"] = "IfNotPresent"
+          container["envFrom"] = [
+              {"configMapRef": {"name": "industrial-cognition-config"}},
+              {"secretRef": {"name": "industrial-cognition-secrets"}},
+          ]
+          yaml.safe_dump(job, open("/tmp/migrate.yaml", "w"))
+          PY
+          kubectl apply -f /tmp/migrate.yaml
+          kubectl -n cogni-ns wait --for=condition=complete job/alembic-migrate --timeout=300s
+
+      - name: Auth, streams and readiness
+        run: |
+          kubectl -n cogni-ns cp scripts/smoke_auth.py deploy/api:/tmp/smoke_auth.py
+          kubectl -n cogni-ns exec deploy/api -- env PYTHONPATH=/app python /tmp/smoke_auth.py
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          kubectl -n cogni-ns get pods
+          kubectl -n cogni-ns describe pods || true
+          kubectl -n cogni-ns logs deploy/api --tail=200 || true
+          kubectl -n cogni-ns logs deploy/vision --tail=200 || true

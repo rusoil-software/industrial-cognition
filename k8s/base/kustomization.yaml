@@ -55,6 +55,7 @@ resources:
   - deployment-vision.yaml
   - deployment-robot.yaml
   - ingress.yaml
+  - cronjob-retention.yaml
   # NOTE: `autoscaling.yaml`, `availability.yaml` and `networkpolicy.yaml` live
   # under `k8s/overlays/prod/` rather than here. They are policy objects whose
   # correctness depends on the production topology (a metrics-server being

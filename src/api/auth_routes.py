@@ -38,12 +38,43 @@ from fastapi import APIRouter, Cookie, Header, HTTPException, Query, Request, st
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel
 
+import os
+
 from src.api import auth
 from src.api.exceptions import AuthError
+from src.api.throttle import AttemptThrottle
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+
+#: Process-local failure counter. With several API replicas the effective limit multiplies by
+#: the replica count - a real limitation, documented in src/api/throttle.py. It exists so a
+#: guessed token cannot be tried at network speed, not to be a security boundary on its own.
+_THROTTLE = AttemptThrottle(
+    max_failures=int(os.getenv("AUTH_MAX_FAILURES", "5")),
+    block_seconds=float(os.getenv("AUTH_LOCKOUT_SECONDS", "300")),
+)
+
+
+def _client_key(request: Request) -> str:
+    """Identify the caller for throttling.
+
+    The address, not the submitted token: keying on the token would let an attacker rotate
+    guesses freely, which is exactly the attack the throttle is for.
+    """
+    return request.client.host if request.client else "unknown"
+
+
+def _guard_throttle(request: Request) -> None:
+    """Raise 429 when this caller is locked out."""
+    retry_after = _THROTTLE.retry_after(_client_key(request))
+    if retry_after > 0:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"too many failed attempts; retry in {int(retry_after)}s",
+            headers={"Retry-After": str(int(retry_after))},
+        )
 
 
 class LoginRequest(BaseModel):
@@ -67,19 +98,30 @@ def _set_session(response: Response, settings: auth.AuthSettings) -> str:
 
 
 @router.post("/login", summary="Exchange the deployment token for a session")
-def login(request: LoginRequest, response: Response) -> dict:
+def login(request: Request, payload: LoginRequest, response: Response) -> dict:
+    _guard_throttle(request)
     settings = auth.get_settings()
     if not settings.login_token:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="this deployment has no AUTH_TOKEN configured",
         )
-    if not auth.matches_login_token(settings, request.token):
+    if not auth.matches_login_token(settings, payload.token):
         # No detail about which part was wrong; a wrong token is simply a wrong token.
+        # Counted against the caller, and a lockout is reported immediately rather than
+        # on the next attempt so the client stops retrying.
+        locked = _THROTTLE.record_failure(_client_key(request))
+        if locked:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"too many failed attempts; retry in {int(locked)}s",
+                headers={"Retry-After": str(int(locked))},
+            )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token"
         )
 
+    _THROTTLE.record_success(_client_key(request))
     _set_session(response, settings)
     logger.info("operator session issued")
     return {"authenticated": True, "expires_in": settings.ttl_seconds}
@@ -87,14 +129,27 @@ def login(request: LoginRequest, response: Response) -> dict:
 
 @router.get("/login", summary="Jupyter-style login link: ?token=... then redirect to /ui/")
 def login_link(
+    request: Request,
     token: str = Query(..., description="the deployment token"),
 ) -> Response:
+    # The token-in-URL shortcut is throttled too: it is the same guess, just typed in a link,
+    # and leaving it open would make the POST limit decorative.
+    _guard_throttle(request)
     settings = auth.get_settings()
     if not settings.login_token or not auth.matches_login_token(settings, token):
+        locked = _THROTTLE.record_failure(_client_key(request))
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token"
+            status_code=(
+                status.HTTP_429_TOO_MANY_REQUESTS if locked else status.HTTP_401_UNAUTHORIZED
+            ),
+            detail=(
+                f"too many failed attempts; retry in {int(locked)}s"
+                if locked
+                else "invalid token"
+            ),
         )
 
+    _THROTTLE.record_success(_client_key(request))
     response = RedirectResponse(url="/ui/", status_code=status.HTTP_303_SEE_OTHER)
     _set_session(response, settings)
     return response
