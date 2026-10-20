@@ -86,13 +86,13 @@ jobs:
           pwsh -NoProfile -Command '
             $files = @("install.ps1", "scripts/console.ps1", "scripts/cluster-doctor.ps1", "scripts/tls-selfsigned.ps1")
             foreach ($file in $files) {
-              if (-not (Test-Path $file)) { Write-Error "$file is missing"; exit 1 }
+              if (-not (Test-Path $file)) { Write-Error "${file} is missing"; exit 1 }
               $tokens = $null
               $errors = $null
               [void][System.Management.Automation.Language.Parser]::ParseFile(
                 (Resolve-Path $file), [ref]$tokens, [ref]$errors)
-              if ($errors) { Write-Error "$file: $($errors[0].Message)"; exit 1 }
-              Write-Host "$file parses"
+              if ($errors) { Write-Error "${file}: $($errors[0].Message)"; exit 1 }
+              Write-Host "${file} parses"
             }'
 
 

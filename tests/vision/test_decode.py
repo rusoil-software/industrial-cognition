@@ -21,6 +21,8 @@ rather than "detections look wrong".
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -291,6 +293,22 @@ def test_decode_batch_accepts_unbatched_input() -> None:
 # --------------------------------------------------------------------------- #
 # Multi-query decoding (one class per prompt, one threshold per prompt)
 # --------------------------------------------------------------------------- #
+def _logit(probability: float) -> float:
+    """Convert a probability to a logit without emitting numpy warnings.
+
+    ``logit(0)`` is ``-inf`` and ``logit(1)`` is ``+inf``. Those are correct values rather than
+    degenerate inputs, and the tests rely on them: "this query must never fire" is exactly a
+    probability of zero. Computing them as ``np.log(p / (1 - p))`` yields the same number but
+    warns (``divide by zero encountered in log``), which makes a green build noisy and would
+    fail outright under ``-W error``. The infinities are therefore stated explicitly.
+    """
+    if probability <= 0.0:
+        return float("-inf")
+    if probability >= 1.0:
+        return float("inf")
+    return float(np.log(probability / (1.0 - probability)))
+
+
 def _multi_output(scores: dict[int, list[float]], num_boxes: int = 8):
     """Build ``(1, N, Q)`` logits where ``scores[box][query]`` is a probability."""
     num_queries = max(len(row) for row in scores.values())
@@ -298,9 +316,40 @@ def _multi_output(scores: dict[int, list[float]], num_boxes: int = 8):
     boxes = np.zeros((1, num_boxes, 4), dtype=np.float16)
     for index, row in scores.items():
         for query, probability in enumerate(row):
-            logits[0, index, query] = float(np.log(probability / (1 - probability)))
+            logits[0, index, query] = _logit(probability)
         boxes[0, index] = np.asarray([0.2 + 0.05 * index, 0.3, 0.08, 0.08], dtype=np.float16)
     return logits, boxes
+
+
+def test_a_zero_probability_query_is_infinite_negative_not_a_nan() -> None:
+    """logit(0) = -inf, and softmax over queries must turn that into a probability of 0.
+
+    A ``-inf`` that becomes ``nan`` anywhere would poison the whole row: every other query on
+    that box would lose its detection too. So the edge case is asserted directly instead of
+    being implied by a neighbouring test.
+    """
+    logits, boxes = _multi_output({0: [0.0, 0.9]})
+
+    assert logits[0, 0, 0] == float("-inf")
+    assert np.isfinite(logits[0, 0, 1])
+
+    detections = decode_queries(
+        logits, boxes, labels=("robot", "person"), thresholds=(0.1, 0.1)
+    )
+
+    assert len(detections) == 1
+    assert detections[0].object_type == "person"
+    assert np.isfinite(detections[0].confidence)
+
+
+def test_building_multi_query_logits_emits_no_warnings() -> None:
+    """The helper is used by every multi-query test; it must not warn at any p in [0, 1]."""
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _multi_output({0: [0.0, 1.0], 1: [0.5, 0.0]})
+
+    runtime = [w for w in caught if issubclass(w.category, RuntimeWarning)]
+    assert runtime == [], [str(w.message) for w in runtime]
 
 
 def test_decode_queries_attributes_each_box_to_its_best_query() -> None:
