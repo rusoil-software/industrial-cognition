@@ -142,10 +142,56 @@ The camera picker now has a **sources** button. It opens:
 Registering a camera does not create a task; set the prompts in the usual editor for that
 camera id afterwards.
 
+## Publishing a laptop camera as RTSP
+
+Docker Desktop and WSL cannot see a USB camera, so a laptop camera cannot be handed to the
+cluster as a device. `scripts/rtsp_camera.py` publishes it as a stream instead, which puts it
+on the same code path a shop-floor IP camera uses:
+
+```bash
+python scripts/rtsp_camera.py --list          # what this machine can open
+python scripts/rtsp_camera.py 0               # device 0, port 8554, path cam
+python scripts/rtsp_camera.py 1 --fps 10 --width 1280 --height 720 --quality 75
+```
+
+It prints every address the stream answers on and says which one is local-only:
+
+```
+RTSP addresses for this stream:
+
+  rtsp://192.168.1.20:8554/cam
+  rtsp://172.19.0.1:8554/cam
+  rtsp://127.0.0.1:8554/cam  (this machine only)
+```
+
+Register the address your cluster can route to (console: **Sources** → source → **register
+and activate**, or `POST /cameras` with `{"source": "rtsp://192.168.1.20:8554/cam",
+"activate": true}`). The `172.x.y.1` entries are Docker/WSL adapters, not your LAN - a pod
+usually cannot reach them. Docker Desktop publishes the host as `host.docker.internal`, but
+that name resolves in containers, not always in pods; the LAN address is the reliable one.
+If the machine has no route to the cluster at all, a probe from inside the cluster fails
+with `the source did not open` and that is the honest answer.
+
+The script is a test aid, not a relay:
+
+* **MJPEG only**, encoded by OpenCV. The payload is RFC 2435 RTP/JPEG, which is not "a JPEG
+  file in a UDP packet": receivers rebuild the JPEG headers from the RTP header and expect
+  only the entropy-coded scan data, so the script splits the encoded frame and ships the
+  quantisation tables in-band. Shipping the whole file makes FFmpeg read image bytes as a
+  quantisation table and drop every frame.
+* **No authentication.** Anyone who can reach the port can watch. Bind a trusted network,
+  or use `--port` and a firewall if that is not acceptable.
+* **No recording, no H.264, no RTCP.** One stream, one codec, one purpose.
+* Capture runs at the publish rate (`--fps`), so a slower camera simply delivers fewer
+  frames; the console shows the negotiated rate, not the requested one.
+
+Verified end to end: OpenCV reads `rtsp://127.0.0.1:8554/cam` at 640x480 and the registry
+probe reports `{"ok": true, "width": 640, "height": 480}` against it.
+
 ## Operating notes
 
-* **Docker Desktop and WSL cannot see a USB camera.** Run capture on the host and publish
-  RTSP (`ffmpeg`, `mediamtx`), then register the RTSP URL - the same code path production
+* **Docker Desktop and WSL cannot see a USB camera.** Publish it with
+  `scripts/rtsp_camera.py` (above) and register the RTSP URL - the same code path production
   uses. This is why a laptop camera cannot simply be handed to the cluster.
 * A camera that answers ONVIF but whose stream is H.265 may open and still produce no
   frames in OpenCV; the probe reports that, and the camera's sub-stream (usually H.264)
@@ -160,6 +206,9 @@ camera id afterwards.
 ## Verification
 
 ```bash
+# publish a laptop camera as a stream the cluster can open
+python scripts/rtsp_camera.py --list
+python scripts/rtsp_camera.py 0
 # discovery
 curl -s -b cookies.txt 'http://localhost:30080/cameras/discover?include_network=true'
 # register + activate an RTSP camera
@@ -172,4 +221,7 @@ curl -s -b cookies.txt http://localhost:30080/status | jq '.runner.camera_id, .r
 
 `tests/camera/` covers classification, redaction, credential round-trips (including a
 wrong key and a tampered token), WS-Discovery parsing over loopback UDP, the probe's
-failure messages, and the supervisor's restart/retry behaviour.
+failure messages, and the supervisor's restart/retry behaviour. The RTSP server has its own
+tests: the RFC 2435 payload round-trip, a full OPTIONS→DESCRIBE→SETUP→PLAY handshake over
+loopback UDP, and - when the `ffmpeg` binary is present - decoding the stream with FFmpeg,
+because that is the decoder OpenCV uses.

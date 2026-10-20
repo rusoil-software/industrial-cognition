@@ -36,6 +36,7 @@ fake frames.
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from pathlib import Path
 from typing import Optional, Union
 
@@ -143,11 +144,9 @@ def build_frame_source(source: Union[str, int], config: CaptureConfig) -> FrameS
             return SyntheticFrameSource(config)
 
         if lowered.isdigit():
-            return DeviceFrameSource(
-                CaptureConfig(**{**config.__dict__, "source": int(lowered)})
-            )
+            return DeviceFrameSource(replace(config, source=int(lowered)))
 
         # An RTSP/HTTP URL or a V4L2 path such as /dev/video0.
-        return DeviceFrameSource(config)
+        return DeviceFrameSource(replace(config, source=source.strip()))
 
-    return DeviceFrameSource(CaptureConfig(**{**config.__dict__, "source": source}))
+    return DeviceFrameSource(replace(config, source=source))

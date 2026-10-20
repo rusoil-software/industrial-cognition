@@ -121,13 +121,21 @@ reads one frame and reports resolution/latency with redacted output; activation 
 transaction guarded by the partial unique index `ux_cameras_only_one_active`, and the capture
 pod follows it by polling (`CAMERA_REGISTRY_WATCH=1`, 5 s) because capture and the API share
 only the database. The console gained a **sources** panel: scan, use, register, probe,
-activate. Full reference: `doc/camera.md`. 62 new tests (`tests/camera/`, `tests/api/test_cameras.py`).
-*Not yet done:* a real camera end to end. There is no IP camera on this network and the
+activate. Full reference: `doc/camera.md`. 70 new tests (`tests/camera/`, `tests/api/test_cameras.py`).
+*Without hardware:* `scripts/rtsp_camera.py` publishes a laptop camera as an RTSP stream
+(pure Python, RFC 2435 RTP/JPEG, no `ffmpeg` binary needed) and prints every address it
+answers on, so the production RTSP path can be exercised with no IP camera on the network.
+Verified live: OpenCV reads `rtsp://127.0.0.1:8554/cam` at 640x480 and 10.9 fps, and the
+registry probe reports `{"ok": true, "width": 640, "height": 480}`. Validating this found a
+real bug: `build_frame_source` returned `DeviceFrameSource(config)` for a URL, which **kept
+the configured device index and silently ignored the camera address** - every RTSP camera
+would have opened the local webcam; it also built configs through `config.__dict__`, which
+`CaptureConfig` (slots) does not have, so the digit branch raised `AttributeError`. Both fixed
+and pinned by `tests/camera/test_sources.py`.
+*Not yet done:* a real IP camera end to end. There is no IP camera on this network and the
 laptop camera is not visible to Docker Desktop/WSL, so the realistic route stays "publish
 RTSP from the host, register the URL" - which is now one form submission instead of an env
-change and a redeploy. `DeviceFrameSource` already negotiates MJPG with
-`CAP_PROP_BUFFERSIZE=1`; a `scripts/probe_camera.py` that prints formats and achievable FPS
-is still the missing diagnostic.
+change and a redeploy.
 *Done when:* real frames reach the console with overlays, at a documented resolution/FPS.
 
 **4. &#9745; Persist detections.** - done 2026-10-20
