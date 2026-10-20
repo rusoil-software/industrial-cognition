@@ -64,6 +64,12 @@ jobs:
           pip install -r requirements/api.txt
           pip install pytest pyyaml
 
+      - name: Generate credentials
+        # `k8s/base/secrets.env` is git-ignored by design (the installers generate it), and the
+        # manifest tests render the overlays, so a checkout needs the file to exist. Values are
+        # irrelevant here - nothing talks to the cluster in this job.
+        run: cp k8s/base/secrets.env.example k8s/base/secrets.env
+
       - name: Unit tests
         run: pytest tests -q -p no:cacheprovider $PYTEST_IGNORE
 
@@ -71,17 +77,23 @@ jobs:
         run: python -m compileall -q src scripts
 
       - name: PowerShell scripts parse
-        # `pwsh` is preinstalled on ubuntu-latest. install.ps1 and console.ps1 are the entry
-        # points on Windows; a parse error there is a broken product.
+        # `pwsh` is preinstalled on ubuntu-latest. install.ps1, console.ps1 and the TLS helper
+        # are the entry points on Windows; a parse error there is a broken product.
+        # `[ref]$null` is not reliably constructible, so a real variable receives the token
+        # stream - which is what the parser wants anyway.
         run: |
           pwsh -NoProfile -Command '
-            foreach ($file in @("install.ps1", "scripts/console.ps1", "scripts/cluster-doctor.ps1")) {
+            $files = @("install.ps1", "scripts/console.ps1", "scripts/cluster-doctor.ps1", "scripts/tls-selfsigned.ps1")
+            foreach ($file in $files) {
+              if (-not (Test-Path $file)) { Write-Error "$file is missing"; exit 1 }
+              $tokens = $null
               $errors = $null
               [void][System.Management.Automation.Language.Parser]::ParseFile(
-                (Resolve-Path $file), [ref]$null, [ref]$errors)
+                (Resolve-Path $file), [ref]$tokens, [ref]$errors)
               if ($errors) { Write-Error "$file: $($errors[0].Message)"; exit 1 }
               Write-Host "$file parses"
             }'
+
 
       - name: Shell scripts parse
         run: |
@@ -106,6 +118,11 @@ jobs:
 
       - name: Install test dependencies
         run: pip install pytest pyyaml
+
+      - name: Generate credentials
+        # Same reason as in the unit job: kustomize fails on a missing env source file, and in
+        # the cluster it is a Secret generated from this file.
+        run: cp k8s/base/secrets.env.example k8s/base/secrets.env
 
       - name: Render every overlay
         run: |
