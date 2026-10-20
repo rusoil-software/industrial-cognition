@@ -199,6 +199,11 @@ Follow the steps in [Onboarding](https://github.com/rusoil-software/industrial-c
    sh install.sh
    ```
 
+   The installer also **generates `k8s/base/secrets.env` with random credentials** if it does not
+   exist yet (the real file is git-ignored; `k8s/base/secrets.env.example` is the template). If you
+   deploy with `kubectl apply -k` instead, create that file yourself first — see
+   [Kubernetes Deployment](#kubernetes-deployment).
+
 4. Wait until installation and deployment is finished
 
 5. Go to `your-server-public-ip/dashboard` (with deployment via reverse proxy) or `localhost:8080/dashboard` (for development on local machine) to see the MVM Web App
@@ -207,8 +212,40 @@ Follow the steps in [Onboarding](https://github.com/rusoil-software/industrial-c
 
 ### Kubernetes Deployment
 
-`install.sh` brings up the Docker Compose stack for local development. Production and staging run on
-Kubernetes from the Kustomize overlays in [`k8s/`](k8s):
+> [!IMPORTANT]
+> **Generate your own credentials before the first deploy.**
+> `k8s/base/secrets.env` is **git-ignored** — the tracked file is `k8s/base/secrets.env.example`.
+> Copy it and replace every value:
+>
+> ```sh
+> cp k8s/base/secrets.env.example k8s/base/secrets.env
+> # then edit every password and token:
+> #   POSTGRES_PASSWORD, RABBITMQ_DEFAULT_PASS, RABBITMQ_ERLANG_COOKIE, REDIS_PASSWORD,
+> #   MINIO_ACCESS_KEY, MINIO_SECRET_KEY, GRAFANA_ADMIN_PASSWORD, AUTH_TOKEN, JWT_SECRET
+> ```
+>
+> `install.sh` / `install.ps1` do this automatically with random values on a fresh checkout; the
+> manual step is only needed when applying the manifests by hand. Without the file, `kubectl apply
+> -k` fails while rendering:
+>
+> ```
+> loading KV pairs: env source files: [secrets.env]: evalsymlink failure on '.../k8s/base/secrets.env'
+> ```
+>
+> * `AUTH_TOKEN` is the token the operator types to open the console (it is exchanged for a short
+>   lived session cookie). Treat it as a password, and set `JWT_SECRET` to something different and
+>   random — both are in the same Secret.
+> * **Do not rotate `POSTGRES_PASSWORD` in this file alone on an existing cluster.** The password
+>   inside the database does not change with it, so the pods simply stop connecting. Rotation is an
+>   operator action that moves both sides at once; see [`doc/k8s.md`](doc/k8s.md) §5.
+> * For an on-premise deployment with no internet access, the TLS certificate comes from a local
+>   internal CA: `scripts/tls-selfsigned.sh` (POSIX) or `scripts/tls-selfsigned.ps1` (Windows). No
+>   public certificate authority is involved.
+
+`install.sh` (Linux/macOS) and `install.ps1` (Windows) deploy the whole stack to a local
+Kubernetes cluster — minikube — including image builds, the model volume, the database migration
+and the operator console. Production and staging use the same manifests through the Kustomize
+overlays in [`k8s/`](k8s):
 
 ```sh
 # Preview exactly what will be created (no cluster changes)
