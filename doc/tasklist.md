@@ -92,19 +92,17 @@ sane logits at ~8.5 s/frame with 3434 MiB peak RSS, and the authenticated consol
 *Still to do:* seed the default prompt in the installer so a recreated cluster is not a fresh
 database with no cognition task.
 
-**2. &#9744; Make the Celery worker lean enough for two.**
-One resident ORT session peaks at **3432 MiB** (measured, `doc/vision-pipeline.md` §13); the dev
-limit is 6 GiB and the node has 10. Two workers is therefore ~6.9 GiB for inference alone,
-leaving too little for Postgres, RabbitMQ, Redis, MinIO and the API.
-Investigate, in order: (a) ORT session options - `enable_cpu_mem_arena`,
-`arena_extend_strategy`, `enable_mem_pattern` - with RSS measured for each; (b) thread count
-per worker (intra-op is already cgroup-aware, but two workers sharing cores contend);
-(c) `worker_max_tasks_per_child` / `max_memory_per_child` so a long-lived child cannot creep;
-(d) image size (the worker image is 1.55 GB - trim what serving does not need);
-(e) a single inference service that the Celery workers call, so the model is resident once
-instead of per replica - the architectural answer if (a)-(d) are not enough.
-*Done when:* two workers plus the rest of the stack fit the node, with measured RSS and
-per-frame latency recorded in `doc/vision-pipeline.md`.
+**2. &#9745; Make the Celery worker lean enough for two.** - done 2026-10-20
+Measured with `scripts/measure_footprint.py` (one process per configuration; `VmHWM` never goes
+down). The **CPU allocation arena** was the lever: turning it off cuts peak RSS by **41%**,
+3465 -> 2042 MiB, at no measurable latency cost in the first measurement (~12% slower in a
+second run at 20 threads against a 6-CPU limit - the honest range). Thread count does not affect
+memory at all, and disabling memory patterns as well doubled latency for 15 MiB.
+`OWL2_CPU_ARENA=1` restores the old behaviour. Verified: `vision` at 2 replicas, both `1/1`,
+RabbitMQ reports **2 consumers**, combined RSS ~3.0 GiB (~2.0 GiB each once warmed).
+Full table and reasoning in `doc/vision-pipeline.md` §16. Remaining levers, not needed for two:
+the 1.55 GB image (`onnxruntime-gpu` dominates and the GPU path needs it) and the architectural
+one - a single inference service with thin Celery clients, instead of one model per replica.
 
 **3. &#9744; Find the real camera from the OS and run it end to end.**
 Windows: `Get-PnpDevice -Class Camera` for the device, OpenCV `CAP_DSHOW` for the index.

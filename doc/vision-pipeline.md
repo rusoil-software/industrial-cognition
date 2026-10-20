@@ -552,3 +552,59 @@ human-readable `value` summarises it as `robot@0.25, person@0.1`. Legacy single-
 rows are migrated on read (their labels expand to one query each, default threshold), so
 no database migration was needed. The dispatcher embeds the whole set in each frame
 payload, keeping workers stateless.
+
+---
+
+## 16. Worker footprint: fitting two workers on one node
+
+Backlog item 2 was "make the Celery worker lean enough for two". One resident ONNX session
+peaked at **3434 MiB** (§13), so two workers plus Postgres, RabbitMQ, Redis, MinIO and the API
+did not fit a 10 GiB node. The levers were measured rather than guessed, with
+`scripts/measure_footprint.py` in the worker image - one process per configuration, because
+`VmHWM` never goes down and two configurations in one process would report the first one's
+peak for the second.
+
+| Configuration | threads | arena | mem pattern | load | latency | peak RSS |
+| --- | --- | --- | --- | --- | --- | --- |
+| baseline (was shipped) | 20 | on | on | 4.3 s | 6825 ms | **3465 MiB** |
+| **arena off (now shipped)** | 20 | off | on | 4.2 s | 6463 ms | **2042 MiB** |
+| mem pattern off | 20 | on | off | 3.7 s | 6658 ms | 2145 MiB |
+| arena + pattern off | 20 | off | off | 4.1 s | 12165 ms | 2027 MiB |
+| single thread | 1 | on | on | 3.6 s | 17746 ms | 3463 MiB |
+| single thread, lean | 1 | off | off | 3.6 s | 27034 ms | 2040 MiB |
+
+### What the numbers say
+
+* **The CPU allocation arena is the lever, and it is nearly free.** Turning it off cuts peak
+  RSS by **41%** (3465 → 2042 MiB) with no measurable latency cost in this measurement. A
+  second run in a dedicated pod, at 20 threads against a 6-CPU limit, showed arena-off ~12%
+  slower (14.9 → 16.8 s) - so the honest statement is "same within noise up to ~12% slower,
+  depending on thread competition", which is still a good trade for 1.4 GiB.
+* **Thread count does not affect memory at all**, and cutting to one thread nearly triples
+  latency. Threads buy speed; they are not a memory lever.
+* **Memory patterns must stay on.** Turning both off saved only 15 MiB more but doubled
+  latency (12.2 s), presumably because allocations are redone every run instead of replayed.
+
+The arena exists to avoid re-allocating between many small inferences per second. This
+pipeline runs one 960x960 pass every few seconds, so the arena is a large reservation held for
+the process lifetime and nothing else. `OWL2_CPU_ARENA=1` restores the old behaviour for
+throughput experiments.
+
+### Two workers, verified
+
+The `vision` Deployment was scaled to 2 replicas: both reached `1/1`, RabbitMQ reports
+**2 consumers** on the `vision` queue, and the pods' combined RSS was ~3.0 GiB shortly after
+scaling (one child still warming; ~2.0 GiB each once loaded). Node requests sat at 43% of a
+10 GiB node.
+
+**Caveat on measuring latency in a worker pod:** running a probe *inside* the worker pod
+reports ~20 s/frame, because the probe and the warmed Celery child both hold a session and
+compete for the pod's 2 CPUs. Latency has to be measured in a dedicated pod; memory can be
+measured anywhere.
+
+### If more than two workers are ever needed
+
+Not pursued, because two is enough for the MVP and the cheap levers are exhausted:
+the worker image is 1.55 GB (`onnxruntime-gpu` dominates and is required for the GPU path), and
+the remaining large win is architectural - one inference service holding the model once, with
+Celery workers as thin clients, instead of one model per replica.

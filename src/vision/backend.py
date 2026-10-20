@@ -375,10 +375,27 @@ class Owl2OnnxBackend:
         # reports latency from a plain session, and a pipeline that silently runs with
         # optimisations off looks like a slow model rather than a misconfiguration.
         options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        # Reuse the allocation arena across frames. At ~7 s per frame on CPU the arena
-        # would otherwise be returned to the OS and re-acquired every time.
+        # CPU memory arena OFF by default. Measured with scripts/measure_footprint.py in the
+        # worker image (doc/vision-pipeline.md §13):
+        #
+        #   arena on   3465 MiB peak, 6825 ms/frame
+        #   arena off  2042 MiB peak, 6463 ms/frame
+        #
+        # A 41% smaller footprint for the same latency. The arena exists to avoid
+        # re-allocating between runs, which matters for thousands of small inferences per
+        # second - not for one 960x960 pass every few seconds, where it simply holds a large
+        # reservation for the process lifetime. Turning it off is what makes two workers fit
+        # a 10 GiB node (2 x ~2.0 GiB instead of 2 x ~3.4 GiB).
+        # OWL2_CPU_ARENA=1 restores the old behaviour for throughput experiments.
+        arena_enabled = os.getenv("OWL2_CPU_ARENA", "0").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        options.enable_cpu_mem_arena = arena_enabled
+        # Memory pattern stays ON: disabling it as well cost latency (12.2 s/frame) for no
+        # further memory saving (2027 MiB).
         options.enable_mem_pattern = True
-        options.enable_cpu_mem_arena = True
         options.log_severity_level = 3
 
         logger.info(
