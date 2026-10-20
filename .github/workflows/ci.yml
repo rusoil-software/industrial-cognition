@@ -50,19 +50,20 @@ jobs:
     name: Unit tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          # The API requirement set, not base.txt: base pulls tensorrt and a GPU stack that a
-          # runner does not have, and the tests do not need inference.
-          pip install -r requirements/api.txt
-          pip install pytest pyyaml
+          # requirements/test.txt = api.txt + a CPU inference runtime + pytest. Not base.txt or
+          # vision.txt: those pull a GPU stack (tensorrt, torch) a runner does not have. The
+          # runtime is required because src/vision/backend.py imports onnxruntime at module
+          # scope, so its absence fails collection rather than skipping.
+          pip install -r requirements/test.txt
 
       - name: Generate credentials
         # `k8s/base/secrets.env` is git-ignored by design (the installers generate it), and the
@@ -106,15 +107,19 @@ jobs:
     name: Manifests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - uses: azure/setup-kubectl@v4
-        with:
-          version: v1.31.0
+      - name: Install kubectl
+        # A plain binary download instead of a setup action: no Node runtime to deprecate, and
+        # the version stays visible in the workflow.
+        run: |
+          curl -fsSLo /tmp/kubectl "https://dl.k8s.io/release/v1.31.0/bin/linux/amd64/kubectl"
+          sudo install -m 0755 /tmp/kubectl /usr/local/bin/kubectl
+          kubectl version --client
 
       - name: Install test dependencies
         run: pip install pytest pyyaml
@@ -147,16 +152,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: azure/setup-kubectl@v4
-        with:
-          version: v1.31.0
+      - name: Install kubectl
+        # A plain binary download instead of a setup action: no Node runtime to deprecate, and
+        # the version stays visible in the workflow.
+        run: |
+          curl -fsSLo /tmp/kubectl "https://dl.k8s.io/release/v1.31.0/bin/linux/amd64/kubectl"
+          sudo install -m 0755 /tmp/kubectl /usr/local/bin/kubectl
+          kubectl version --client
 
       - name: Start a kind cluster
-        uses: helm/kind-action@v1
-        with:
-          cluster_name: cogni
+        # Same reasoning as kubectl: a binary download rather than a JavaScript action.
+        run: |
+          curl -fsSLo /tmp/kind "https://kind.sigs.k8s.io/dl/v0.24.0/kind-linux-amd64"
+          sudo install -m 0755 /tmp/kind /usr/local/bin/kind
+          kind create cluster --name cogni --wait 180s
+          kubectl cluster-info
 
       - name: Build and load images
         run: |

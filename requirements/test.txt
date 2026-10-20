@@ -1,0 +1,21 @@
+# Test dependencies for CI (.github/workflows/ci.yml) and for running the suite locally.
+#
+# Deliberately `api.txt` plus a CPU inference runtime - not `vision.txt` or `base.txt`. Those
+# pull a GPU stack (tensorrt, torch) that a CI runner neither has nor needs, and that is also why
+# the unit job installs this file rather than the full image's requirements.
+#
+# `onnxruntime` is here because it is imported at module scope: `src/vision/backend.py` builds
+# every ORT session, so `tests/vision/test_backend.py` (and anything importing the worker) fails
+# at collection with "No module named 'onnxruntime'" without it. That was the second CI failure.
+-r api.txt
+
+# pytest-asyncio is installed because pytest.ini sets `asyncio_mode = auto`; without it the
+# setting is an unknown option and asynchronous tests would be collected as ordinary functions.
+pytest>=8.3
+pytest-asyncio>=0.24
+
+# CPU-only: provider selection and session options are unit-tested, no GPU is required.
+onnxruntime>=1.20
+
+# Manifest tests parse the manifests directly.
+pyyaml>=6.0
