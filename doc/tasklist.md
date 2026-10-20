@@ -76,6 +76,12 @@ sheds frames with bounded latency otherwise, both asserted by tests.
 
 ### **Pre-Stage 3 backlog (agreed 2026-10-17)**
 
+**Status 2026-10-20: 8 of 13 done.** Done: 1 (model on PVC), 2 (two workers), 4 (persistence),
+5 (readiness), 6 (auth hardening), 8 (queue hygiene), 10 (CI), plus the `object_type` follow-up.
+Open: 3 (real camera - waiting on hardware), 7 (ingress/TLS), 9 (multi-camera), 11 (detection
+quality dataset), 12 (GPU decision); 13 (model delivery) is deferred by agreement with the MinIO
+replacement.
+
 Ordered roughly by what blocks what. Items 1-3 are the ones we named; the rest are gaps this
 build exposed that will cost more to fix later than now.
 
@@ -128,10 +134,10 @@ four-value enum (`metal_sheet`, `detail`, `debris`, `clutter`) that predates fre
 so new `label` (the operator's text) and `camera_id` (indexed with `timestamp`) columns were
 added. Verified live: 27 rows for camera `main` with `label` values `robot`, `person`,
 `cardboard box`, coordinates, confidences and frame ids preserved.
-*Follow-up found while verifying:* because none of those labels are enum members, every row
-stores `object_type = clutter`. Either the enum grows robot/person (a migration) or queries
-should use `label`; today the enum carries almost no information. Capture also needs a
-retention policy - nothing prunes rows yet.
+*Both follow-ups are closed.* `object_type` became free text in migration `d5f8b2a1c9e3` and was
+backfilled from `label` - verified: 244 rows that were all `clutter` now read `cardboard box`
+116, `robot` 75, `person` 58, none left as clutter. Retention is the daily CronJob in
+`k8s/base/cronjob-retention.yaml` (item 8's section and `doc/database.md`).
 
 **5. &#9745; Make readiness honest.** - done 2026-10-20
 `/readyz` answers "should traffic come here", `/health` stays liveness. The policy is a pure

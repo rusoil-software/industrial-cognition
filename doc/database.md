@@ -206,14 +206,23 @@ is additive:
 | `camera_id` (varchar 64) | "the last hour for camera X" is the primary history query, and JSONB metadata cannot be indexed for it. Composite index with `timestamp`. |
 | `label` (varchar 64) | The prompt text exactly as the operator typed it. |
 
-`label` exists because `object_type` is a four-value PostgreSQL enum (`metal_sheet`, `detail`,
-`debris`, `clutter`) written before prompts were free-form. Persisting "robot" or "person" into
-that column raises, so the repository keeps the coarse category (`coerce_object_type` maps
-unknown labels to `clutter`) and stores the real label separately.
+### `object_type` is the label (migration `d5f8b2a1c9e3`)
 
-**Consequence worth knowing:** with the current prompt vocabulary, `object_type` is almost
-always `clutter`. Queries should use `label`. Growing the enum (robot, person, …) is a
-migration and a domain decision, not a code tweak.
+`object_type` began as a four-value enum (`metal_sheet`, `detail`, `debris`, `clutter`) from
+before prompts were free-form. Every real prompt - "robot", "person", "cardboard box" - was
+consequently stored as **`clutter`**, which made history useless for the only question it exists
+to answer: what did we find.
+
+The column is now `varchar(64)` holding the prompt's own name, normalised (lower-cased,
+whitespace-collapsed) by `src/api/storage/labels.py`. `label` keeps the exact text as typed, so
+normalisation costs no fidelity. The old enum type is dropped; the initial migration still
+creates it, because history is history, and the drop lives in the later revision.
+
+Verified live: 244 rows that were all `clutter` now read `cardboard box` 116, `robot` 75,
+`person` 58, with `object_type` equal to `label` and zero rows left as `clutter`.
+
+Queries should filter on `object_type`; the composite `(object_type, timestamp)` index already
+covers "last 30 days of robot".
 
 ### Retention
 

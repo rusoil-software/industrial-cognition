@@ -150,7 +150,12 @@ def _enum(enum_class: type[enum.Enum], name: str) -> Enum:
 #: ``DropTableOp`` renderer to emit the matching ``DROP TYPE IF EXISTS``; this
 #: tuple documents the vocabulary and is asserted against the model metadata by
 #: `tests/db/test_models.py`.
-ENUM_TYPE_NAMES: tuple[str, ...] = ("object_type", "camera_status")
+# `object_type` used to be an enum here as well. Migration d5f8b2a1c9e3 converts the column
+# to free text and drops the type: an enum that only knows metal_sheet/detail/debris/clutter
+# forced every other prompt label into `clutter`, which is exactly what the `label` column was
+# added to work around. The initial migration still creates the type - history is history -
+# and the drop lives in that later revision.
+ENUM_TYPE_NAMES: tuple[str, ...] = ("camera_status",)
 
 
 class DetectionResult(Base):
@@ -204,11 +209,14 @@ class DetectionResult(Base):
         "generic object_type. Without this column, persistence would simply fail for "
         "every label outside the four-value enum.",
     )
-    object_type: Mapped[ObjectType] = mapped_column(
-        _enum(ObjectType, "object_type"),
+    object_type: Mapped[str] = mapped_column(
+        String(64),
         nullable=False,
         index=True,
-        doc="Classification result.",
+        doc="What was found, named as the prompt names it ('metal_sheet', 'robot', ...). "
+        "Free text rather than an enum: the prompt vocabulary belongs to the System User, "
+        "not to the schema. The four-value enum this column started with is dropped by "
+        "migration d5f8b2a1c9e3, which backfills from `label`.",
     )
     coordinates: Mapped[dict[str, Any]] = mapped_column(
         JSONB,

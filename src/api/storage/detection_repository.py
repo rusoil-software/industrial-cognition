@@ -23,10 +23,11 @@ console or for Stage 3 analytics.
 
 Two things this module is careful about:
 
-* **The enum is narrower than the prompts.** `object_type` has four values; a camera can
-  ask for "robot" or "person". `coerce_object_type` keeps the coarse category (unknown
-  labels become `clutter`) while `label` stores what the operator actually typed. Writing
-  the raw label into the enum column would raise, which is the failure this avoids.
+* **The label is the value.** `object_type` is free text and stores the prompt's own name
+  ('robot', 'person', ...), normalised; `label` keeps it exactly as typed. Until migration
+  d5f8b2a1c9e3 the column was a four-value enum, so every real prompt was recorded as
+  `clutter` - a category that told the operator nothing. Detections are looked up by what was
+  actually asked for.
 * **Rows are written per detection, not per frame**, matching the table's shape (frame_id
   is deliberately not unique). One frame with four detections is four rows.
 
@@ -43,29 +44,16 @@ from typing import Any, Iterable, Optional, Sequence
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from src.api.storage.models import DetectionResult, ObjectType
+from src.api.storage.labels import normalise_object_type
+from src.api.storage.models import DetectionResult
 
 __all__ = [
-    "coerce_object_type",
     "count_detections",
     "latest_detections",
     "save_detections",
 ]
 
 logger = logging.getLogger(__name__)
-
-#: Enum members by value, for the coercion below.
-_OBJECT_TYPES = {member.value: member for member in ObjectType}
-
-
-def coerce_object_type(label: str) -> ObjectType:
-    """Map a prompt label onto the persisted enum.
-
-    The enum predates free-form prompts, so anything outside it keeps the operator's label
-    in the `label` column and is categorised as clutter rather than rejected. Losing the
-    coarse category is a reporting inconvenience; losing the detection is data loss.
-    """
-    return _OBJECT_TYPES.get((label or "").strip().lower(), ObjectType.CLUTTER)
 
 
 def save_detections(
@@ -99,7 +87,7 @@ def save_detections(
                 frame_id=int(frame_id),
                 camera_id=camera_id,
                 label=label or None,
-                object_type=coerce_object_type(label),
+                object_type=normalise_object_type(label),
                 coordinates={
                     "x": float(detection.x_norm),
                     "y": float(detection.y_norm),
