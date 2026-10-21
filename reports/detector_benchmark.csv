@@ -1,0 +1,4 @@
+model,family,license,license_ok,runtime,device,weights_mb,params_m,load_s,latency_p50_ms,latency_p95_ms,fps,peak_rss_mb,peak_gpu_mb,presence_recall,presence_specificity,sheet_iou_mean,warehouse_hits,measured,notes
+owl2-onnx,OWLv2,Apache-2.0,yes,onnxruntime,cpu,293.41,,17.65,5944.48,6769.94,0.14,2832.08,0.00,1.0000,1.0000,0.8576,1.00,yes,"the incumbent: same artifact the cluster runs, CPU, 8 threads"
+yolo-world-m,YOLO-World v2 M,AGPL-3.0,no,ultralytics,cuda,54.58,28.38,0.83,20.44,68.47,32.45,3466.10,599.77,0.0000,1.0000,0.0000,1.00,yes,"fast, but the ultralytics runtime is AGPL-3.0: copyleft for a hosted product"
+yolo-world-l,YOLO-World v2 L,AGPL-3.0,no,ultralytics,cuda,89.86,46.83,0.66,22.91,23.80,45.97,3710.00,918.84,0.0000,1.0000,0.0000,1.00,yes,"as M, with a larger backbone"

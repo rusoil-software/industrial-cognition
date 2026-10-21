@@ -893,3 +893,32 @@ capability it has out of the box, and the calibration is only as good as the pho
 behind it. GPU acceleration remains deferred by decision (Stage 4 item 12): the measurements
 above are CPU, and they are enough to say "there" or "not there".
 
+
+## 20. Choosing a detector with a CSV, not with an opinion
+
+Section 19 ends with a sentence worth following: presence at a station is a *calibrated* use of a
+zero-shot model, and calibration is only as good as the photographs behind it. The obvious next
+question is whether a different detector would need less calibration.
+
+That question is answered by measurement, not by reading model cards on the internet. `src/benchmark/`
+holds a small harness: one adapter per runtime, one dataset built from the frames this deployment
+actually carries, one scoring path through the shipped `PresenceGate`, and one CSV. The details -
+the protocol, the ground truth, the licences and the numbers - are in `doc/detector-benchmark.md`;
+the evidence file is `reports/detector_benchmark.csv`.
+
+Two decisions in that harness matter more than any single model, and both were paid for in
+measurement:
+
+* **Score the frames the pipeline carries.** Full-resolution photographs put 2-4 points of
+  confidence on every model for free (the incumbent's top box read 0.1564 raw, 0.1291 after the
+  capture encode). A benchmark that skips the encode measures a system nobody ships.
+* **Use the phrase the deployment stores.** `metal sheet` gave OWLv2 recall 0.25 and sheet IoU
+  0.43 on the real workpiece; the deployed `steel blank` gave 1.00 and 0.86. A benchmark with a
+  friendlier phrase than production is a benchmark of a different product.
+
+The result that closed the question for now: the incumbent is the only candidate that is both
+Apache-2.0-compatible and able to see the part at all; the fast alternatives are AGPL-3.0
+(YOLO-World) and blind to a bare metal blank, and the accurate closed-vocabulary alternatives
+(Grounding DINO base, Florence-2) could not be downloaded on this network and are recorded as not
+measured rather than as failures. Re-running the CSV on a working network is the next honest step,
+and it needs no code change.

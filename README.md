@@ -280,6 +280,7 @@ The following files detail *how* to build and *how* to maintain the system:
 * **`doc/tasklist.md`**: The master tracker for tracking all remaining development tasks.
 * **`doc/k8s.md`**: The Kubernetes deployment model, operator runbook and manifest validation contract.
 * **`doc/camera.md`**: Camera discovery, the camera registry, password handling and the sources panel.
+* **`doc/detector-benchmark.md`**: How candidate detectors are compared - the station protocol, the CSV columns, the licences, and how to re-run it.
 
 <!-- ROADMAP -->
 ## Roadmap

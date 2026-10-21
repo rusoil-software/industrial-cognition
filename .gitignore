@@ -53,3 +53,9 @@ k8s/**/*.rendered.yaml
 
 # Kubernetes tests: scratch kustomization fixtures
 tests/k8s/.scratch/
+
+# Model weights downloaded at run time (benchmark, ultralytics CLIP): never committed.
+# `YOLO_WEIGHTS_DIR` points the detector weights at a cache; ultralytics still drops its
+# CLIP text encoder here, which is why the directory exists at all.
+weights/
+reports/*.json

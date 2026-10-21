@@ -76,15 +76,16 @@ sheds frames with bounded latency otherwise, both asserted by tests.
 
 ### **Pre-Stage 3 backlog (agreed 2026-10-17)**
 
-**Status 2026-10-21: 11 of 15 implemented.** Done: 1 (model on PVC), 2 (two workers), 4 (persistence),
+**Status 2026-10-21: 12 of 16 implemented.** Done: 1 (model on PVC), 2 (two workers), 4 (persistence),
 5 (readiness), 6 (auth hardening), 8 (queue hygiene), 10 (CI), 14 (live view: tracked boxes,
 delete, liveness), 15 (metal-sheet presence: calibration tooling, the `presence` message and the
-geometry gate that tells the part from the table), plus the `object_type`
-follow-up. Implemented but not yet validated with hardware: 3 (camera discovery + registry -
-code, console and tests are in place, no IP camera on the network yet). Open: 7 (ingress/TLS),
-9 (multi-camera), 11 (detection quality dataset), 12 (GPU decision - deferred by request after
-the CPU presence measurements); 13 (model delivery) is deferred by agreement with the MinIO
-replacement. Items 14 and 15 were added while testing item 3, so the original list had 13.
+geometry gate that tells the part from the table), 16 (detector benchmark: harness, CSV, licence
+verdicts), plus the `object_type` follow-up. Implemented but not yet validated with hardware: 3
+(camera discovery + registry - code, console and tests are in place, no IP camera on the network
+yet). Open: 7 (ingress/TLS), 9 (multi-camera), 11 (detection quality dataset), 12 (GPU decision -
+deferred by request after the CPU presence measurements); 13 (model delivery) is deferred by
+agreement with the MinIO replacement. Items 14-16 were added while testing items 3 and 15, so the
+original list had 13.
 
 Ordered roughly by what blocks what. Items 1-3 are the ones we named; the rest are gaps this
 build exposed that will cost more to fix later than now.
@@ -458,6 +459,38 @@ below is CPU, and it is enough.*
     12's question, this item is "with what, once we know where". A model image also gives item 13 a different
     answer than MinIO: nothing to deliver if the model ships inside the container, at the cost of a larger image
     that a registry makes cheap to cache and expensive to rebuild blindly.
+
+**16. &#9745; Measure the candidate detectors instead of arguing about them.** - done 2026-10-21
+*Added by the owner: "OWL 2 fundamentally does not think and would never be able to solve the task on
+its own without jumping hoops with OpenCV ... let's start with a little experiment script that will
+use OWLv2, Grounding DINO (base/SWIN-T), Grounding DINO 1.5 Edge, Florence-2-base, YOLO-World-M/L
+and DINO-X and evaluates their performance (accuracy, FPS, weights size, memory used, etc) ... The
+script should generate a csv with results as proof ... we need to consider model license being
+Apache 2.0-compatible."*
+
+* `src/benchmark/` is the harness: `registry.py` (one `ModelSpec` per candidate, with the
+  licence), `dataset.py` (13 samples: 8 station pan phases, 4 absence crops, 1 warehouse scene),
+  `scoring.py` (scoring through the shipped `PresenceGate`), `measure.py` (latency, load time,
+  peak RSS/VRAM, weights size), `report.py` (the CSV contract) and `runners.py` (one adapter per
+  runtime, so the scoring code cannot tell them apart).
+* `scripts/benchmark_detectors.py` writes `reports/detector_benchmark.csv` and a per-sample
+  details CSV. `src/benchmark/Dockerfile` + `requirements/benchmark.txt` keep PyTorch and the
+  AGPL runtime out of every production image.
+* **Two protocol decisions mattered more than the models.** (1) Frames are encoded exactly as
+  the capture loop encodes them (`max_side` 960, quality 80): full-resolution photographs
+  flattered every model by 2-4 points of confidence. (2) The station phrase is `steel blank`,
+  the one the deployment stores, not `metal sheet`: measuring the incumbent with the easier
+  phrase gave recall 0.25 and IoU 0.43, measuring the shipped phrase gave 1.00 and 0.86.
+* **Measured** (RTX 4060 Laptop, 2026-10-21, numbers in the CSV): OWLv2 CPU p50 ~9.5 s/frame,
+  2.8 GB RSS, recall 1.00, sheet IoU 0.86; YOLO-World M/L on GPU are the only real-time
+  candidates and are AGPL-3.0, i.e. not shippable.
+* **Not measured, with reasons**: Grounding DINO 1.5 Edge and DINO-X have no open weights
+  (API-only, credentials required); Grounding DINO base and Florence-2-base were blocked by the
+  HuggingFace CDN on this network (~30 KB/s while GitHub served 4 MB/s on the same machine, with
+  repeated `The read operation timed out`). Their adapters are written and produce `measured=no`
+  rows, so a re-run on a working network fills them in without a code change.
+* Tests: 62 in `tests/benchmark/` (registry, dataset, scoring, report, weight cache path).
+  Reference: `doc/detector-benchmark.md`, evidence in `reports/detector_benchmark.csv`.
 
 ### **Fixed while doing item 1**
 

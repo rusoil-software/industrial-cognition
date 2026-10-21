@@ -1,0 +1,40 @@
+model,sample_id,scenario,positive,boxes,best_iou,hit,present,chosen_confidence,reason,latency_ms
+owl2-onnx,station-pan-0,station,True,4,0.8952,True,True,0.1041,,6482.29
+owl2-onnx,station-pan-1,station,True,5,0.8597,True,True,0.1193,,5853.57
+owl2-onnx,station-pan-2,station,True,4,0.8263,True,True,0.1192,,6123.34
+owl2-onnx,station-pan-3,station,True,6,0.8505,True,True,0.1055,,6769.94
+owl2-onnx,station-pan-4,station,True,4,0.9084,True,True,0.0717,,5944.48
+owl2-onnx,station-pan-5,station,True,5,0.856,True,True,0.0876,,6001.15
+owl2-onnx,station-pan-6,station,True,4,0.8291,True,True,0.1057,,5899.56
+owl2-onnx,station-pan-7,station,True,5,0.836,True,True,0.1158,,6081.89
+owl2-onnx,station-absent-wall-band,station,False,0,0.0,False,False,0.0,the model produced no box at all,5271.84
+owl2-onnx,station-absent-floor-band,station,False,3,0.0,False,False,0.0,"area 0.2519 > 0.2000 (a table, not the part)",5522.1
+owl2-onnx,station-absent-left-margin,station,False,0,0.0,False,False,0.0,the model produced no box at all,4996.31
+owl2-onnx,station-absent-right-margin,station,False,0,0.0,False,False,0.0,the model produced no box at all,4998.73
+owl2-onnx,warehouse,warehouse,True,41,0.8646,True,,0.0,,22336.47
+yolo-world-m,station-pan-0,station,True,0,0.0,False,False,0.0,the model produced no box at all,68.47
+yolo-world-m,station-pan-1,station,True,0,0.0,False,False,0.0,the model produced no box at all,70.72
+yolo-world-m,station-pan-2,station,True,0,0.0,False,False,0.0,the model produced no box at all,62.65
+yolo-world-m,station-pan-3,station,True,0,0.0,False,False,0.0,the model produced no box at all,17.49
+yolo-world-m,station-pan-4,station,True,0,0.0,False,False,0.0,the model produced no box at all,17.31
+yolo-world-m,station-pan-5,station,True,0,0.0,False,False,0.0,the model produced no box at all,17.49
+yolo-world-m,station-pan-6,station,True,0,0.0,False,False,0.0,the model produced no box at all,17.57
+yolo-world-m,station-pan-7,station,True,0,0.0,False,False,0.0,the model produced no box at all,17.31
+yolo-world-m,station-absent-wall-band,station,False,0,0.0,False,False,0.0,the model produced no box at all,28.77
+yolo-world-m,station-absent-floor-band,station,False,0,0.0,False,False,0.0,the model produced no box at all,22.53
+yolo-world-m,station-absent-left-margin,station,False,0,0.0,False,False,0.0,the model produced no box at all,23.9
+yolo-world-m,station-absent-right-margin,station,False,0,0.0,False,False,0.0,the model produced no box at all,20.44
+yolo-world-m,warehouse,warehouse,True,22,0.7296,True,,0.0,,15.93
+yolo-world-l,station-pan-0,station,True,0,0.0,False,False,0.0,the model produced no box at all,23.47
+yolo-world-l,station-pan-1,station,True,0,0.0,False,False,0.0,the model produced no box at all,22.91
+yolo-world-l,station-pan-2,station,True,0,0.0,False,False,0.0,the model produced no box at all,22.43
+yolo-world-l,station-pan-3,station,True,0,0.0,False,False,0.0,the model produced no box at all,23.55
+yolo-world-l,station-pan-4,station,True,0,0.0,False,False,0.0,the model produced no box at all,22.66
+yolo-world-l,station-pan-5,station,True,0,0.0,False,False,0.0,the model produced no box at all,23.13
+yolo-world-l,station-pan-6,station,True,0,0.0,False,False,0.0,the model produced no box at all,22.97
+yolo-world-l,station-pan-7,station,True,0,0.0,False,False,0.0,the model produced no box at all,23.8
+yolo-world-l,station-absent-wall-band,station,False,0,0.0,False,False,0.0,the model produced no box at all,19.53
+yolo-world-l,station-absent-floor-band,station,False,0,0.0,False,False,0.0,the model produced no box at all,17.73
+yolo-world-l,station-absent-left-margin,station,False,0,0.0,False,False,0.0,the model produced no box at all,18.73
+yolo-world-l,station-absent-right-margin,station,False,0,0.0,False,False,0.0,the model produced no box at all,18.01
+yolo-world-l,warehouse,warehouse,True,45,0.7169,True,,0.0,,23.88
