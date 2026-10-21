@@ -76,13 +76,14 @@ sheds frames with bounded latency otherwise, both asserted by tests.
 
 ### **Pre-Stage 3 backlog (agreed 2026-10-17)**
 
-**Status 2026-10-20: 10 of 14 implemented.** Done: 1 (model on PVC), 2 (two workers), 4 (persistence),
+**Status 2026-10-21: 11 of 15 implemented.** Done: 1 (model on PVC), 2 (two workers), 4 (persistence),
 5 (readiness), 6 (auth hardening), 8 (queue hygiene), 10 (CI), 14 (live view: tracked boxes,
-delete, liveness), plus the `object_type` follow-up. Implemented but not yet validated with
-hardware: 3 (camera discovery + registry - code, console and tests are in place, no IP camera
-on the network yet). Open: 7 (ingress/TLS), 9 (multi-camera), 11 (detection quality dataset),
-12 (GPU decision); 13 (model delivery) is deferred by agreement with the MinIO replacement.
-Item 14 was added while testing item 3, so the original list had 13.
+delete, liveness), 15 (metal-sheet presence + calibration tooling), plus the `object_type`
+follow-up. Implemented but not yet validated with hardware: 3 (camera discovery + registry -
+code, console and tests are in place, no IP camera on the network yet). Open: 7 (ingress/TLS),
+9 (multi-camera), 11 (detection quality dataset), 12 (GPU decision - deferred by request after
+the CPU presence measurements); 13 (model delivery) is deferred by agreement with the MinIO
+replacement. Items 14 and 15 were added while testing item 3, so the original list had 13.
 
 Ordered roughly by what blocks what. Items 1-3 are the ones we named; the rest are gaps this
 build exposed that will cost more to fix later than now.
@@ -246,6 +247,12 @@ The prod overlay requests `nvidia.com/gpu` and the worker image installs `onnxru
 nothing has ever run on a GPU: every measurement is CPU at ~11 s/frame. Before performance work
 in Stage 3, confirm a GPU runtime actually exists (`CUDAExecutionProvider` visible in the pod)
 or state plainly that 60 FPS is out of scope for now.
+*Decision 2026-10-21 (owner):* **do not pursue GPU acceleration now.** The development rig is an
+RTX 4060 Laptop (8 GB) and the test rig an RTX 5060 (8 GB); both remain unused by the vision
+path. The reason is visible in item 15: presence of the real sheet is answerable on CPU once the
+prompt is chosen and the threshold calibrated, so GPU work would buy latency the station does
+not need yet. Revisit when multi-camera throughput (item 9) or sub-second tracking forces it,
+which is also when the 8 GB budget becomes the constraint worth measuring.
 
 **13. &#9744; Model delivery stays manual, by agreement.**
 The artifact lives on a PVC and is copied by hand. Revisit together with the MinIO replacement
@@ -327,6 +334,40 @@ not in the original 13.*
   `{tracks: 1, seeded: 4, updated: 463, merged: 0, match_distance: 0.25}` - one box per object,
   and a drop counter that no longer reports the intended cadence as a fault. `/ui/app.js`
   answered `cache-control: no-cache, must-revalidate`, so a rebuilt console needs no hard reload.
+
+**15. &#9745; Presence for the real metal sheet: calibrate before trusting the default.** - done 2026-10-21
+The test deployment needs the station question answered - "is the blank on the table or not" -
+on a real photograph rather than a warehouse stock image. *Added after the owner provided
+`assets/images/metal_sheet_test_image.jpg`. It also settles the GPU question for now: everything
+below is CPU, and it is enough.*
+
+* The photograph is a brushed-metal sheet on a white table in a tiled hallway, i.e. exactly as a
+  fixed station camera would see it. Top-box scores were measured for 10 phrasings; `steel blank`
+  localises the sheet (centre `0.483, 0.588`, size `0.590 x 0.421`) at **0.2459**, `metal blank`
+  at 0.2448, the committed `metal sheet` at 0.1564. Absence crops of the same photograph (doorway,
+  wall, bare table) stay at or below 0.0465.
+* **Consequence:** the shipped default threshold of 0.25 reports "no part" for a sheet that fills
+  half the frame. The threshold therefore belongs to the camera; `PUT /cameras/{id}/prompt`
+  already supports one per query.
+* **Limitation, measured not assumed:** the tiled floor scores 0.19 (`steel blank`), so no
+  threshold separates floor from workpiece - the camera must be aimed at the station, and a zone
+  constraint (item 4) would make this robust. Cropping tighter makes scores *worse* (0.1235 for
+  the table crop, 0.0569 for the sheet alone), because this export uses surrounding context.
+* Added `scripts/calibrate_presence.py` (photographs in, threshold out, refuses to print one when
+  the groups overlap by less than `2 x margin`), prompt fixtures `assets/prompts/steel_blank.json`
+  and `metal_blank.json`, `tests/vision/test_metal_sheet_presence.py` (6 model-marked assertions:
+  localisation, absence crops, separation, prompt choice) and
+  `tests/scripts/test_calibrate_presence.py` (12 fast tests).
+* Verified live in the dev cluster: camera `metal-sheet` on
+  `replay:/app/assets/images/metal_sheet_test_image.jpg`, prompts `steel blank` and `metal blank`
+  at `0.15`, produced `detection_results` rows `steel blank` 0.202-0.222 and `metal blank` 0.208
+  with box centre `(0.48, 0.59)` - the sheet, at a threshold the defaults would have rejected.
+  The console lists it active with its two queries; `main` (warehouse replay) stays registered and
+  inactive, so switching back is one click.
+* Still open for the real station: repeat the calibration with the owner's own photographs of the
+  test rig (the tool is the workflow; one photograph is not evidence), and wire the presence
+  answer to the robot in Stage 3. Reference: `doc/vision-pipeline.md` §19 and `doc/camera.md`
+  "Presence at a station".
 
 ### **Stage 3: Polish & Hardening**
 

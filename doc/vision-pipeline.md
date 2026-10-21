@@ -703,3 +703,88 @@ interval. Frames kept only for the preview are counted as `shed_sampling`, separ
 then a rising `dropped_capacity` means the workers really are slower than the chosen sampling,
 and a rising `shed_sampling` is the pipeline doing what it was told.
 
+## 19. Presence: "is the sheet there or not?"
+
+Everything above is about *finding* things in a scene the model can already see. The station
+question is narrower and less forgiving: a metal blank either sits on the table or it does
+not, and the answer decides whether the robot picks. A box in the wrong place, or a
+confident box on an empty table, is worse than no box at all.
+
+The real workpiece photograph changed this question and complicated it:
+`assets/images/metal_sheet_test_image.jpg` (a brushed-metal sheet on a white table in a tiled
+hallway, shot the way a fixed camera would see the station). Measured on the exported artifact
+(CPU, 960x960 input, 2026-10-21, top box per prompt):
+
+| prompt | sheet | doorway crop | wall crop | bare table crop | tiled floor crop |
+| --- | --- | --- | --- | --- | --- |
+| `steel blank` | **0.2459** | 0.0122 | 0.0000 | 0.0465 | 0.1911 |
+| `metal blank` | **0.2448** | 0.0232 | 0.0000 | 0.0170 | 0.1743 |
+| `metal sheet` | **0.1564** | 0.0064 | 0.0000 | 0.0232 | 0.0767 |
+
+Three conclusions, each with a consequence for deployment:
+
+1. **The model localises the real sheet correctly and cheaply.** Every prompt above puts its
+   best box at the same place (centre `0.483, 0.588`, size `0.590 x 0.421`), which is the
+   sheet and not the wall behind it. Absence crops of the same photograph score at most
+   `0.0465`, so the separation between "there" and "not there" is a factor of five.
+2. **The deployed default of 0.25 would call an empty station.** `steel blank` reaches
+   `0.2459` - a near miss that reads as "no part" at the default threshold, while
+   `metal sheet` (`0.1564`) is a plain miss. The threshold therefore belongs to the *camera*,
+   set from photographs of that station, not to the model. `PUT /cameras/{id}/prompt` already
+   carries a threshold per query (§15); this is what it is for.
+3. **`steel blank` beats `metal sheet`.** The industrial word for a cut sheet is the one the
+   text encoder places closer to the pixels of a cut sheet.
+   `tests/vision/test_metal_sheet_presence.py` asserts this, so a later "simplification" back
+   to `metal sheet` fails loudly.
+
+The uncomfortable finding is the right-hand column: **the tiled floor scores 0.19**. Glossy
+beige tiles read as brushed sheet metal, and no threshold separates them from a real blank at
+`0.24`. That is not a bug in the model; it is a statement about where the camera may point.
+A presence check needs the station to fill the frame, or a zone constraint (backlog item 4), or
+both. The photograph also shows why calibration has to be per-camera: aiming tighter *did not*
+help - cropping to the table dropped `steel blank` from `0.2459` to `0.1235`, and to the sheet
+alone to `0.0569`, because this export uses surrounding context to decide that a flat rectangle
+is a workpiece and not a table top.
+
+### 19.1 Calibrating a station camera
+
+`scripts/calibrate_presence.py` turns "how confident is the model here?" into a number a
+deployment can use. It scores photographs from the station, some with the part and some
+without, and prints the midpoint of the two groups - refusing to print a threshold when the
+groups overlap or sit closer than `2 x margin`:
+
+```
+python scripts/calibrate_presence.py \
+    --query assets/prompts/steel_blank.json \
+    --positive "photos/station_loaded/*.jpg" \
+    --negative "photos/station_empty/*.jpg"
+```
+
+On the real photograph, with the doorway, wall and bare table as the empty set, it reports
+`positive min 0.241`, `negative max 0.049`, `threshold 0.145`. The same number reaches the API
+as `PUT /cameras/metal-sheet/prompt` with `{"label": "steel blank", "threshold": 0.15}`.
+
+Presence is then the ordinary detection path: any box for that label above the threshold means
+"the part is there". Nothing extra is persisted, so `detection_results` answers "when was the
+sheet last seen" without a new table, and the tracker (§18) keeps the box steady between the
+inference results an operator actually needs to trust.
+
+**Verified in the cluster** after registering `metal-sheet` (replay source
+`/app/assets/images/metal_sheet_test_image.jpg`, prompts `steel blank` and `metal blank` at
+`0.15`, activated):
+
+| camera | label | rows | min | max |
+| --- | --- | --- | --- | --- |
+| `metal-sheet` | `steel blank` | 2 | 0.202 | 0.222 |
+| `metal-sheet` | `metal blank` | 1 | 0.208 | 0.208 |
+
+Persisted geometry `x 0.17-0.20, y 0.377, w 0.59, h 0.42` (centre `0.48, 0.59`) - the sheet,
+in the deployed pipeline, at a threshold the defaults would have rejected.
+
+What this section does **not** claim: that the model is good at this in general. It was
+measured on one workpiece, one camera position and one afternoon's lighting. The honest
+position is that presence at a station is a *calibrated* use of a zero-shot model, not a
+capability it has out of the box, and the calibration is only as good as the photographs
+behind it. GPU acceleration remains deferred by decision (Stage 4 item 12): the measurements
+above are CPU, and they are enough to say "there" or "not there".
+

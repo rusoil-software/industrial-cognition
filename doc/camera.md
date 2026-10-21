@@ -296,6 +296,49 @@ reports `{"ok": true, "width": 640, "height": 480}` against it, and a registered
 from `--image` produced real detections in `detection_results` (`robot` 0.275, `person`
 0.220) through capture, dispatch, inference and the sink.
 
+## Presence at a station: "is the part there?"
+
+A camera aimed at a station asks a simpler question than "find everything": is the metal blank
+on the table or not? The short answer is that this works, and that it works *because* of the
+per-query threshold, not because of the default one.
+
+Register the camera with the sheet prompt at a calibrated threshold:
+
+```
+curl -X PUT "http://<console>/cameras/metal-sheet/prompt?token=<token>" \
+  -H "Content-Type: application/json" \
+  -d '{"prompts": [{"label": "steel blank", "threshold": 0.15},
+                   {"label": "metal blank", "threshold": 0.15}]}'
+curl -X POST "http://<console>/cameras?token=<token>" \
+  -H "Content-Type: application/json" \
+  -d '{"id": "metal-sheet", "label": "Metal sheet station",
+       "source": "replay:/app/assets/images/metal_sheet_test_image.jpg", "activate": true}'
+```
+
+Any box for that label above `0.15` means the part is there; the console draws it and
+`detection_results` keeps the history. Measured in the dev cluster on the real photograph:
+`steel blank` at 0.202-0.222, `metal blank` at 0.208, box centre `(0.48, 0.59)` - the sheet.
+
+Two things to know before pointing a camera at the real station:
+
+* **The default threshold of 0.25 misses the real sheet** (`steel blank` reaches 0.2459). The
+  threshold has to be measured on photographs of *that* station. `scripts/calibrate_presence.py`
+  takes a folder of shots with the part and a folder without, prints the score of each, and
+  suggests a threshold only when the two groups separate by more than `2 x margin`:
+
+  ```
+  python scripts/calibrate_presence.py --query assets/prompts/steel_blank.json \
+      --positive "photos/station_loaded/*.jpg" --negative "photos/station_empty/*.jpg"
+  ```
+
+* **Glossy floor tiles read as sheet metal** (0.19 on the test photograph). Thresholds cannot
+  fix a scene where the floor looks like the workpiece: aim the camera so the station fills the
+  frame, and treat `steel blank` boxes far from the expected place as suspicious. Zone
+  constraints are backlog item 4.
+
+`doc/vision-pipeline.md` §19 has the full measurement table, including why cropping tighter
+makes the score *worse* rather than better.
+
 ## Operating notes
 
 * **Docker Desktop and WSL cannot see a USB camera.** Publish it with

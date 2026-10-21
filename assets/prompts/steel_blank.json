@@ -1,0 +1,44 @@
+{
+  "labels": [
+    "steel blank"
+  ],
+  "prompt": "steel blank.",
+  "tokenizer": "google/owlv2-base-patch16-ensemble",
+  "max_length": 16,
+  "input_ids": [
+    49406,
+    4726,
+    15134,
+    269,
+    49407,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "attention_mask": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ]
+}
