@@ -198,6 +198,7 @@ block is the service-endpoint contract that the application modules are wired to
 | `STREAM_FPS` / `STREAM_IDLE_TIMEOUT` | `10` / `15` | `src/api/stream.py` (preview) |
 | `TRACKING_ENABLED` / `TRACKER_TYPE` / `TRACK_FPS` | `1` / `kcf` / `10` | `src/vision/tracking.py` |
 | `PIPELINE_DISPATCH_INTERVAL_SECONDS` | `0` (dev `10`) | `src/pipeline/runner.py` (sampling) |
+| `PRESENCE_ENABLED` / `PRESENCE_ROI` / `PRESENCE_MIN_AREA` / `PRESENCE_MAX_AREA` / `PRESENCE_MIN_ASPECT` / `PRESENCE_MAX_ASPECT` / `PRESENCE_MIN_CONFIDENCE` / `PRESENCE_MIN_INSIDE` | `0` / `0.15,0.33,0.85,0.85` / `0.02` / `0.20` / `1.0` / `2.6` / `0.10` / `0.5` | `src/vision/presence.py` (station answer) |
 | `PERSIST_DETECTIONS` / `PERSIST_ONLY_DETECTIONS` | `1` / `1` | `src/api/detection_sink.py` |
 | `PERSIST_MIN_INTERVAL_SECONDS` | `1.0` | `src/api/detection_sink.py` |
 | `DETECTION_RETENTION_DAYS` | `30` | retention CronJob |

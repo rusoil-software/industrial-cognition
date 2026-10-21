@@ -78,7 +78,8 @@ sheds frames with bounded latency otherwise, both asserted by tests.
 
 **Status 2026-10-21: 11 of 15 implemented.** Done: 1 (model on PVC), 2 (two workers), 4 (persistence),
 5 (readiness), 6 (auth hardening), 8 (queue hygiene), 10 (CI), 14 (live view: tracked boxes,
-delete, liveness), 15 (metal-sheet presence + calibration tooling), plus the `object_type`
+delete, liveness), 15 (metal-sheet presence: calibration tooling, the `presence` message and the
+geometry gate that tells the part from the table), plus the `object_type`
 follow-up. Implemented but not yet validated with hardware: 3 (camera discovery + registry -
 code, console and tests are in place, no IP camera on the network yet). Open: 7 (ingress/TLS),
 9 (multi-camera), 11 (detection quality dataset), 12 (GPU decision - deferred by request after
@@ -368,6 +369,36 @@ below is CPU, and it is enough.*
   test rig (the tool is the workflow; one photograph is not evidence), and wire the presence
   answer to the robot in Stage 3. Reference: `doc/vision-pipeline.md` §19 and `doc/camera.md`
   "Presence at a station".
+* **Follow-up the same day - the best box was the table.** Looking at the console, the owner
+  pointed out that the detection finds the *table* the sheet lies on, and the sheet itself only as
+  a smaller second box (`steel blank` 0.2459 on the table vs **0.1594** on the part, 90 % inside
+  the sheet). Ten rephrasings later (`stainless steel sheet`, `brushed steel plate`,
+  `reflective metal plate`, `mirror`, ...) it was clear that phrasing cannot promote the part:
+  a brushed sheet, a table top and a tiled floor are the same kind of flat light rectangle. The
+  answer is **geometry, not language** - `src/vision/presence.py` gates the existing boxes by
+  station region, area, aspect and the calibrated confidence, and answers the station question
+  from them. Measured on the real photo the gate refuses 7 of 8 boxes and keeps exactly the part
+  (`area 0.2484 > 0.2000 (a table, not the part)`, `only 36% inside the station region`,
+  `confidence 0.097 < 0.100`). The runner publishes `{"type": "presence", ...}` per inference,
+  `/status` carries `checks`/`present`/`errors`/`last_reason` and the gate in force, and the
+  console shows a `part present` / `no part` badge. A failed inference publishes nothing, so a
+  worker timeout cannot read as "the part is gone". Config is env-only (`PRESENCE_*`, off by
+  default) because the region and size band belong to one physical stand; the dev overlay carries
+  this stand's measured values. Tests: `tests/vision/test_presence.py` (45) and
+  `tests/pipeline/test_runner_presence.py` (11). Reference: `doc/vision-pipeline.md` §19.2.
+
+* **Follow-up after the first live run - the badge flapped.** Deployed as written, presence
+  alternated `part present` / `no part` on every inference. Two causes, both found by measuring
+  the frames the worker actually sees across the replay pan: the user's `steel sheet` prompt at
+  0.1 only ever produced the *table* box (the part needs `steel blank` at ~0.08), and on the old
+  gate the part's own score moves 0.085-0.125 across the eight pan phases while
+  `PRESENCE_MIN_CONFIDENCE=0.10` cut exactly the low phases. Lowering the floor alone let the
+  **wall behind the stand** in (0.070-0.087, 86 % inside the region - its score overlaps the
+  part's). The fix is to make geometry, not confidence, the discriminator: region top edge
+  `0.42` (below the wall band) and `PRESENCE_MAX_ASPECT=2.0` (wall 2.27, part 1.31). All eight
+  phases now accept the part and the table/floor/wall boxes of the pan are all refused.
+  `tests/vision/test_presence.py` pins the eight phases and the wall case. Reference:
+  `doc/vision-pipeline.md` §19.2 "Why the confidence floor is 0.05".
 
 ### **Stage 3: Polish & Hardening**
 

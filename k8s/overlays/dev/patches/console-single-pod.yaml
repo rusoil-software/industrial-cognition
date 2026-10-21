@@ -34,11 +34,32 @@ spec:
               value: "5"
             - name: PIPELINE_MAX_IN_FLIGHT
               value: "2"
-            # CPU inference here is ~14 s/frame (measured p50 13.7 s), so offering every
-            # captured frame only fills the window: ``dropped_capacity`` grew while nothing
-            # was wrong. Sample instead - the interval sits just above the measured inference
-            # time, so a worker always has one frame in flight, the preview keeps its 5 FPS,
-            # and a rising ``dropped_capacity`` means a real problem again. Remove this once
-            # inference is faster than the capture cadence.
+            # CPU inference here is ~14 s/frame (measured p50 13.7 s, p99 22 s), so offering
+            # every captured frame only fills the window: ``dropped_capacity`` grew while
+            # nothing was wrong. Sample instead - the interval sits above the measured p99,
+            # so one worker with one slot keeps up, the preview keeps its 5 FPS, and a rising
+            # ``dropped_capacity`` means a real problem again. At 15 s a second frame still
+            # queued behind a 22 s inference often outlived ``CELERY_QUEUE_TTL_SECONDS=60``
+            # and was dead-lettered, which surfaced as a ``failed`` task every few minutes.
+            # Remove this once inference is faster than the capture cadence.
             - name: PIPELINE_DISPATCH_INTERVAL_SECONDS
-              value: "15"
+              value: "25"
+            # The test stand: the region and the size band measured on
+            # assets/images/metal_sheet_test_image.jpg. The model's best box there is the
+            # *table* (area 0.250, confidence 0.2459) and the workpiece is its second
+            # candidate (area 0.075, confidence 0.1594), so presence is a geometry
+            # question, not a phrasing one (doc/vision-pipeline.md §19.2).
+            # The replay pans its still, which moves the part's score between 0.085 and
+            # 0.125 across eight phases, so the confidence floor has to stay at 0.05;
+            # the wall behind the stand scores 0.070-0.087 and is kept out by the region
+            # top edge (0.42) and the 2.0 aspect ceiling instead.
+            - name: PRESENCE_ENABLED
+              value: "1"
+            - name: PRESENCE_ROI
+              value: "0.15,0.42,0.85,0.85"
+            - name: PRESENCE_MAX_AREA
+              value: "0.20"
+            - name: PRESENCE_MAX_ASPECT
+              value: "2.0"
+            - name: PRESENCE_MIN_CONFIDENCE
+              value: "0.05"

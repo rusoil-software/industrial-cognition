@@ -33,6 +33,13 @@
           <span :class="['pill', tracking.enabled ? 'neutral' : 'warn']" :title="tracking.reason || 'boxes follow the video between inferences'">
             tracking {{ tracking.enabled ? tracking.tracker : 'off' }}
           </span>
+          <span v-if="presence && presence.present" class="pill ok"
+                :title="presence.detection ? 'station: ' + presence.detection.object_type + ' ' + (presence.detection.confidence * 100).toFixed(0) + '%' : 'the part is on the station'">
+            part present
+          </span>
+          <span v-else-if="presence" class="pill bad" :title="presence.reason || 'no part on the station'">
+            no part
+          </span>
           <span class="pill neutral">{{ resultFps.toFixed(1) }} results/s</span>
           <span class="pill neutral">frame {{ lastFrameNumber }}</span>
           <button class="ghost" @click="signOut">sign out</button>

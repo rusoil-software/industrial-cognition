@@ -235,6 +235,34 @@ def _build_tracker():
     return pool
 
 
+def _build_presence_gate():
+    """The station presence gate, or ``None`` when the deployment did not ask for one.
+
+    Presence is off unless ``PRESENCE_ENABLED`` is truthy, so every deployment that does
+    not describe a station behaves exactly as before. A malformed description switches
+    the check off with a loud log line rather than falling back to "anywhere in the
+    frame", which would report the floor as a part.
+    """
+    try:
+        from src.vision.presence import from_environment
+
+        gate = from_environment()
+    except Exception as exc:  # noqa: BLE001 - configuration must never block capture
+        logger.warning("station presence is disabled: %s", exc)
+        return None
+    if gate is not None:
+        logger.info(
+            "station presence gate: roi=%s area=%s..%s aspect=%s..%s confidence>=%s",
+            gate.roi,
+            gate.min_area,
+            gate.max_area,
+            gate.min_aspect,
+            gate.max_aspect,
+            gate.min_confidence,
+        )
+    return gate
+
+
 def start_pipeline(
     source: Optional[str] = None, camera_id: Optional[str] = None
 ) -> bool:
@@ -270,6 +298,7 @@ def start_pipeline(
                 os.getenv("PIPELINE_DISPATCH_INTERVAL_SECONDS", "0") or 0
             ),
         )
+        presence = _build_presence_gate()
         runner = PipelineRunner(
             build_frame_source(config.capture.source, config.capture),
             CeleryTransport(),
@@ -278,6 +307,7 @@ def start_pipeline(
             sink=_build_sink(),
             tracker=_build_tracker(),
             track_fps=float(os.getenv("TRACK_FPS", "10")),
+            presence_gate=presence,
         )
         if not runner.start():
             _START_ERROR = "capture source could not be opened"

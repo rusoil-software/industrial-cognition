@@ -116,6 +116,7 @@ class PipelineRunner:
         sink: Optional[Callable[[Any], bool]] = None,
         tracker: Optional[Any] = None,
         track_fps: float = DEFAULT_TRACK_FPS,
+        presence_gate: Optional[Any] = None,
     ) -> None:
         self._source = source
         self._config = config or RunnerConfig()
@@ -133,6 +134,16 @@ class PipelineRunner:
         self._track_next = 0.0
         self._track_errors = 0
         self._had_tracks = False
+        # Optional `src.vision.presence.PresenceGate`. Presence is a *question about the
+        # station*, not another detector: it reuses the boxes inference already produced
+        # and answers "is the part on the table". Injected so the pipeline layer stays
+        # free of the geometry rules and a deployment without a configured station does
+        # no extra work at all.
+        self._presence_gate = presence_gate
+        self._presence_checks = 0
+        self._presence_errors = 0
+        self._presence_present = 0
+        self._presence_reason: Optional[str] = None
         self._next_dispatch_at = 0.0
         self._stats = PipelineStats(
             camera_id=self._config.capture.camera_id,
@@ -400,6 +411,51 @@ class PipelineRunner:
                 logger.exception("could not seed the trackers from frame %s",
                                  getattr(result, "frame_number", "?"))
 
+    def _publish_presence(self, result: Any) -> None:
+        """Answer "is the part on the station" from the boxes inference just produced.
+
+        Guarded like every other consumer: a presence check is a convenience for the
+        operator and the robot, never a reason to lose a frame. When no gate is
+        configured this is a single `is None` test, so deployments that do not ask for
+        presence pay nothing.
+        """
+        if self._presence_gate is None:
+            return
+        try:
+            from src.vision.presence import select_presence
+
+            detections = getattr(result, "detections", ()) or ()
+            if getattr(result, "error", None):
+                # A failed inference is not an empty station. Publishing "no part" here
+                # would stop a line because a worker timed out.
+                return
+            best, report = select_presence(detections, self._presence_gate)
+            self._presence_checks += 1
+            if best is None:
+                self._presence_reason = report.get("reason")
+            else:
+                self._presence_present += 1
+                self._presence_reason = None
+            self._broadcaster.publish(
+                {
+                    "type": "presence",
+                    "camera_id": getattr(result, "camera_id", None) or self._config.capture.camera_id,
+                    "frame_number": getattr(result, "frame_number", None),
+                    "capture_ts_ns": getattr(result, "capture_ts_ns", None),
+                    "present": best is not None,
+                    "offered": report.get("offered", len(detections)),
+                    "accepted": report.get("accepted", 0),
+                    "reason": report.get("reason"),
+                    "detection": None if best is None else best.to_payload(),
+                }
+            )
+        except Exception:  # noqa: BLE001 - see the docstring
+            self._presence_errors += 1
+            if self._presence_errors == 1:
+                logger.exception(
+                    "presence check failed for frame %s", getattr(result, "frame_number", "?")
+                )
+
     # -- output ------------------------------------------------------------
     def _publish(self, result: Any) -> None:
         """Hand a result to the broadcaster, then offer it to the persistence sink."""
@@ -409,6 +465,7 @@ class PipelineRunner:
             logger.exception("failed to publish frame %s", getattr(result, "frame_number", "?"))
 
         self._seed_tracks(result)
+        self._publish_presence(result)
 
         # Fan-out first and persistence second: a slow or failing database must not delay
         # the live view, which is the operator's primary signal. The sink enforces its own
@@ -471,5 +528,25 @@ class PipelineRunner:
                 else {"enabled": False}
             ),
             "track_errors": self._track_errors,
+            "presence": (
+                {
+                    "enabled": True,
+                    "checks": self._presence_checks,
+                    "present": self._presence_present,
+                    "errors": self._presence_errors,
+                    "last_reason": self._presence_reason,
+                    "gate": {
+                        "roi": list(self._presence_gate.roi),
+                        "min_area": self._presence_gate.min_area,
+                        "max_area": self._presence_gate.max_area,
+                        "min_aspect": self._presence_gate.min_aspect,
+                        "max_aspect": self._presence_gate.max_aspect,
+                        "min_confidence": self._presence_gate.min_confidence,
+                        "min_inside": self._presence_gate.min_inside,
+                    },
+                }
+                if self._presence_gate is not None
+                else {"enabled": False}
+            ),
             "server_time_ns": now_ns(),
         }

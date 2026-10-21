@@ -33,6 +33,14 @@ painting it over the live frame produced two boxes that never coincided, which r
 tracking. When detection and tracking disagree, the detection is the answer.
 See `doc/vision-pipeline.md` §18.
 
+**The part at the station.** When the deployment describes a station (`PRESENCE_ENABLED`), the
+top bar gains one more badge: `part present` (green) or `no part` (red), with the reason in the
+tooltip when nothing qualifies (`area 0.2484 > 0.2000 (a table, not the part)`). It answers a
+different question from the boxes on the video - the boxes say what the model sees, this says
+whether what it sees is a part at the station - and it is computed from the same boxes, so a
+green badge never appears next to an empty table. A failed inference updates neither, so a slow
+frame cannot read as "the part is gone". See `doc/vision-pipeline.md` §19.2.
+
 **Liveness is a number, not an image.** A browser keeps the last MJPEG frame on screen when
 the stream stops, so the console polls `/status` every 2 s and shows the age of the newest
 captured frame in a badge (`live · 0.4s`, `stale · 12.1s`, `camera offline`,
@@ -50,8 +58,8 @@ of silence, which is what makes the browser raise `onerror` and the console retr
 | `GET /cameras/{id}/snapshot` | the last JPEG the inference actually saw |
 | `GET /cameras/{id}/stream` | MJPEG preview, `STREAM_FPS` (10), closes when capture stops |
 | `GET /cameras/{id}/stats` | pipeline, throughput and fan-out snapshot |
-| `GET /status` | pipeline + registry + tracking state (drives the live badge) |
-| `WS /ws/detections` | results as they complete, plus `{"type": "tracks"}` between them |
+| `GET /status` | pipeline + registry + tracking + presence state (drives the live badge) |
+| `WS /ws/detections` | results as they complete, plus `{"type": "tracks"}` and `{"type": "presence"}` |
 | `PUT/GET/DELETE /cameras/{id}/prompt` | the cognition task |
 | `DELETE /cameras/{id}` | forget a camera **and** its cognition task |
 

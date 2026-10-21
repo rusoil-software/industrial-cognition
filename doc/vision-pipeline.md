@@ -781,6 +781,111 @@ inference results an operator actually needs to trust.
 Persisted geometry `x 0.17-0.20, y 0.377, w 0.59, h 0.42` (centre `0.48, 0.59`) - the sheet,
 in the deployed pipeline, at a threshold the defaults would have rejected.
 
+### 19.2 When the best box is the table
+
+Look at what the console drew on the photograph and the calibration above looks too
+optimistic. The model puts its **best** box around the white table - the thing the sheet lies
+on - and the workpiece is its *second* candidate. With `score_threshold=0.02`, top three boxes
+per phrasing (centre, size, fraction of the box inside the sheet):
+
+| prompt | table | part |
+| --- | --- | --- |
+| `steel blank` | 0.2459 _(0.483, 0.588)_ `0.590x0.421` | **0.1594** _(0.494, 0.570)_ `0.311x0.232`, 90 % inside the sheet |
+| `stainless steel sheet` | 0.1501 | 0.1259 |
+| `brushed steel plate` | 0.1428 | 0.1078 |
+| `reflective metal plate` | 0.1200 | 0.0891 |
+| `mirror` | 0.3349 (table) / 0.5684 (floor tiles) | - |
+| `shiny metal plate` | 0.0559 | - |
+
+No phrasing promotes the part above the table. The part is distinguished by *where and how
+big it is*, not by how it looks: a brushed sheet, a table top and a tiled floor are the same
+kind of flat, light, low-texture rectangle. Two further attempts were checked and rejected:
+
+* **Cropping tighter does not help.** It removes the scene context the export uses: the
+  station crop scored `0.1235`, the sheet-only crop `0.0569`.
+* **A gloss/reflection measure is not a classifier.** Specular highlights move with the
+  lighting and the camera position, so they would need their own calibration per stand and
+  still would not separate a table from a sheet.
+
+The workable answer is a **geometry gate**: the station is fixed, so the part is the only
+object whose box has the part's size, aspect and position. `src/vision/presence.py` applies
+that to the boxes inference already produced - no second model, no new table:
+
+```python
+PresenceGate(
+    roi=(0.15, 0.42, 0.85, 0.85),   # the station region, normalised
+    min_area=0.02, max_area=0.20,   # a part is small; a table is not
+    min_aspect=1.0, max_aspect=2.0, # a sheet lies flat
+    min_confidence=0.05,            # the part's own score moves across a pan
+    min_inside=0.5,                 # half over the edge still counts
+)
+```
+
+Measured on the photograph, the gate refuses 7 of the 8 boxes and keeps exactly the part:
+the table is rejected as `area 0.2484 > 0.2000 (a table, not the part)`, the floor box as
+`only 36% inside the station region`, and the answer is `present`, one accepted box, centre
+`(0.494, 0.570)`, size `0.311 x 0.232`, confidence `0.1594`.
+
+#### Why the confidence floor is 0.05 and the region starts at 0.42
+
+The first deployment of this gate alternated `part present` / `no part` on every other
+inference, and the cause was not the gate's idea, it was the *cadence*. The replay source pans
+its still by 24 pixels in an eight-phase sine, so the same photograph produces slightly
+different scores each loop. On the frame the vision worker actually sees (encoded at quality 80,
+long edge 960), across the eight phases:
+
+| box | confidence | area | aspect | centre |
+| --- | --- | --- | --- | --- |
+| the table | 0.176 - 0.223 | 0.251 | 1.40 | 0.48, 0.59 |
+| **the part** | **0.085 - 0.125** | 0.075 | 1.31 | 0.49, 0.57 |
+| the floor | 0.071 - 0.140 | 0.110 | 1.32 | 0.44, 0.88 |
+| the wall behind the stand | 0.070 - 0.087 | 0.083 | **2.27** | 0.65, 0.40 |
+
+The part and the wall **overlap in confidence** (0.085 vs 0.087), so no confidence floor can
+separate them: at 0.10 the part disappears on the low phases (hence the flapping), and at a
+floor low enough to keep it (0.05) the wall gets in (86 % of its box lies inside the old
+region). What separates them is geometry, and only geometry:
+
+* the **region's top edge at 0.42** sits below the wall band (y 0.31 - 0.50), so at most 43 %
+  of it counts as inside the station;
+* its **2.27 aspect** is outside the 1.00 - 2.00 band, independently of the region.
+
+Both rules refuse it, which is the point: one threshold that happens to work today is not a
+calibration. With the values above all eight phases of the part are accepted and the table,
+the floor and both wall boxes of the pan are refused.
+
+The pipeline publishes the answer as its own message, next to the detections that produced it:
+
+```json
+{"type": "presence", "camera_id": "metal-sheet", "frame_number": 41,
+ "present": true, "offered": 8, "accepted": 1, "reason": null,
+ "detection": {"object_type": "steel blank", "x_norm": 0.3385, "y_norm": 0.563,
+               "width_norm": 0.314, "height_norm": 0.239, "confidence": 0.1199}}
+```
+
+The prompt that produced those numbers is `steel blank` at threshold 0.08, which is the
+*detection* threshold, not the presence floor: the two are separate knobs on purpose. The
+station's own prompt set (`steel blank`, `metal blank`) is stored per camera, so changing the
+phrasing is a console edit, not a deploy.
+
+`/status` carries the counters (`checks`, `present`, `errors`, `last_reason`) and the gate
+that is in force. Three properties matter more than the numbers:
+
+* **A failed inference is not an empty station.** A worker timeout publishes nothing, so a
+  slow frame cannot stop a line.
+* **The reason is reported.** "No part" and "the gate is misconfigured" look identical from
+  outside otherwise, and they are the two failures that matter.
+* **Off by default.** `PRESENCE_ENABLED` is the switch; without it the pipeline does no extra
+  work at all. The region and the size band are properties of one physical stand, so the
+  defaults are deliberately loose and a deployment configures its own (see
+  `k8s/overlays/dev/patches/console-single-pod.yaml` for the measured values of this stand and
+  `doc/k8s.md` for the keys).
+
+What this gate does **not** do: it does not find the part anywhere in the frame (that is the
+detector's job), it does not see a part that is outside the region or turned on edge, and it
+cannot tell two identical parts apart. It answers one question - "is the part at the station
+now?" - and answers it without pretending to more.
+
 What this section does **not** claim: that the model is good at this in general. It was
 measured on one workpiece, one camera position and one afternoon's lighting. The honest
 position is that presence at a station is a *calibrated* use of a zero-shot model, not a

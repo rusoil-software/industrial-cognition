@@ -142,6 +142,29 @@ data:
   # only for the preview are counted as ``shed_sampling``, not as over-capacity drops.
   PIPELINE_DISPATCH_INTERVAL_SECONDS: "0"
 
+  # ------------------------------------------------------------------ presence
+  # "Is the part on the station?" answered from the same inference boxes plus the
+  # geometry of one fixed camera (doc/vision-pipeline.md §19.2). Off by default: the
+  # region and size band describe a *physical station*, not the software, so a
+  # deployment that has not measured its stand must not report a part.
+  PRESENCE_ENABLED: "0"
+  # x1,y1,x2,y2 of the station region in normalised frame coordinates. The top edge
+  # sits below the wall behind the stand: that wall scores 0.070-0.087, i.e. inside
+  # the range the real part occupies, so only geometry keeps it out.
+  PRESENCE_ROI: "0.15,0.42,0.85,0.85"
+  # Box area as a fraction of the frame: smaller is noise, larger is the table.
+  PRESENCE_MIN_AREA: "0.02"
+  PRESENCE_MAX_AREA: "0.20"
+  # Width/height band; a sheet lying flat is wider than it is tall (measured 1.31),
+  # while the wall band behind the stand is 2.27.
+  PRESENCE_MIN_ASPECT: "1.0"
+  PRESENCE_MAX_ASPECT: "2.0"
+  # Below this a box is not the part; calibrate with scripts/calibrate_presence.py.
+  # Kept low (0.05) on purpose: the part's own score moves by 40% across a pan.
+  PRESENCE_MIN_CONFIDENCE: "0.05"
+  # How much of the box must lie inside the region; 0.5 allows a part on the edge.
+  PRESENCE_MIN_INSIDE: "0.5"
+
 
   # -------------------------------------------------------------------- robot
   # Binary Modbus; RS-485 is the authority (doc/conventions.md §3). The TCP

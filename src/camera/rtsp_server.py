@@ -843,12 +843,17 @@ class MjpegRtspServer:
             if buffer:
                 peer.send(bytes(buffer))
             return
-        if session.socket is None or session.address is None:
+        # Read the socket once: another thread may drop the session between this check
+        # and the first send, and a `None` here must be one clean OSError (the writer
+        # loop treats it as a goodbye), not an AttributeError on a half-closed session.
+        sock = session.socket
+        address = session.address
+        if sock is None or address is None:
             raise OSError("the client RTP socket is gone")
         for index, payload in enumerate(payloads):
-            session.socket.sendto(
+            sock.sendto(
                 self._rtp_packet(session, timestamp, payload, marker=index == last),
-                session.address,
+                address,
             )
 
     @staticmethod

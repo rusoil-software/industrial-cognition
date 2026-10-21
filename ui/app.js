@@ -55,6 +55,8 @@ createApp({
     const streamNonce = ref(0);
     const tracks = ref([]);
     const tracking = ref({ enabled: false, tracker: null, reason: null, tracks: 0 });
+    // Latest station answer: {present, reason, detection, offered, accepted} or null.
+    const presence = ref(null);
     const frameAge = ref(null);
     const liveState = ref("unknown");
     const deleting = ref("");
@@ -554,6 +556,12 @@ createApp({
           scheduleDraw();
           return;
         }
+        if (payload.type === "presence") {
+          // The station question, answered from the same inference boxes. It arrives
+          // with the detections, so the badge and the boxes always describe one frame.
+          presence.value = payload;
+          return;
+        }
 
         const metadata = payload.metadata || {};
         lastFrameNumber.value = metadata.frame_number ?? lastFrameNumber.value;
@@ -629,6 +637,7 @@ createApp({
       deleting,
       tracks,
       tracking,
+      presence,
       frameAge,
       liveState,
       pollHealth,

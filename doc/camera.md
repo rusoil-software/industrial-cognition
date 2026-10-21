@@ -336,6 +336,31 @@ Two things to know before pointing a camera at the real station:
   frame, and treat `steel blank` boxes far from the expected place as suspicious. Zone
   constraints are backlog item 4.
 
+* **The most confident box on the real stand is the table, not the part.** The model puts
+  `steel blank` at 0.2459 around the white table and only 0.1594 on the sheet itself, and no
+  rephrasing (`stainless steel sheet`, `brushed steel plate`, `mirror`) promotes the part.
+  The part is distinguished by *size and place*, so turn on the geometry gate and describe the
+  stand once:
+
+  ```
+  PRESENCE_ENABLED=1
+  PRESENCE_ROI=0.15,0.42,0.85,0.85
+  PRESENCE_MAX_AREA=0.20
+  PRESENCE_MAX_ASPECT=2.0
+  PRESENCE_MIN_CONFIDENCE=0.05
+  ```
+
+  Keep the confidence floor low and let geometry do the work: across a pan of the same
+  photograph the part's score moves between 0.085 and 0.125, which overlaps the wall behind
+  the stand (0.070-0.087). What separates them is the region's top edge and the 2.27 aspect of
+  the wall band, so a floor of 0.10 makes the badge flap and a loose floor alone lets the wall
+  in. `doc/vision-pipeline.md` §19.2 has the per-phase table.
+
+  The API then publishes a `presence` message per inference (`present`, the chosen box, and the
+  `reason` when nothing qualifies) and the console shows a `part present` / `no part` badge. A
+  failed inference publishes nothing rather than "no part". `k8s/overlays/dev/patches/console-single-pod.yaml`
+  has the values that describe this test stand.
+
 `doc/vision-pipeline.md` §19 has the full measurement table, including why cropping tighter
 makes the score *worse* rather than better.
 

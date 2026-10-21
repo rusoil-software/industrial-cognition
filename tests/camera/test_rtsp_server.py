@@ -489,3 +489,26 @@ def test_a_frame_that_arrives_while_the_previous_one_is_pending_is_dropped(jpeg)
         assert server.snapshot()["frames_dropped"] == 2
     finally:
         server.stop()
+
+
+def test_a_udp_session_that_lost_its_socket_is_an_oserror(jpeg):
+    """The writer loop treats OSError as "the client left"; an AttributeError would
+    surface as an unhandled thread exception instead of a clean shutdown."""
+    server = MjpegRtspServer(
+        lambda: jpeg, fps=25.0, width=WIDTH, height=HEIGHT, host="127.0.0.1", port=0
+    )
+    session = RtpSession(
+        session_id="gone",
+        protocol="udp",
+        client_rtp_port=1234,
+        connection=None,
+        interleaved=0,
+        socket=None,
+        ssrc=1,
+        playing=True,
+        address=("127.0.0.1", 1234),
+    )
+    frame = parse_jpeg(jpeg)
+    payloads = packetize_frame(frame)
+    with pytest.raises(OSError):
+        server._send_frame(session, 0, payloads)
