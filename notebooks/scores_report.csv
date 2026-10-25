@@ -1,0 +1,221 @@
+split,idx,y,n_boxes,best,lat,first,model
+positive,1,1,0,0.0,0.33891160000348464,,Florence-2-base (caption presence)
+positive,2,1,0,0.0,0.23622510000132024,,Florence-2-base (caption presence)
+positive,3,1,0,0.0,0.2422851999872364,,Florence-2-base (caption presence)
+positive,4,1,0,0.0,0.4614772999775596,,Florence-2-base (caption presence)
+positive,5,1,0,0.0,0.46178579999832436,,Florence-2-base (caption presence)
+positive,6,1,0,0.0,0.2986281999910716,,Florence-2-base (caption presence)
+positive,7,1,0,0.0,0.4296574000036344,,Florence-2-base (caption presence)
+positive,8,1,0,0.0,0.27638939997996204,,Florence-2-base (caption presence)
+positive,9,1,0,0.0,0.2905674999929033,,Florence-2-base (caption presence)
+positive,10,1,0,0.0,0.19216679999954067,,Florence-2-base (caption presence)
+negative,1,0,0,0.0,0.21869380000862293,,Florence-2-base (caption presence)
+negative,2,0,0,0.0,0.2830930999771226,,Florence-2-base (caption presence)
+negative,3,0,0,0.0,0.22802760000922717,,Florence-2-base (caption presence)
+negative,4,0,0,0.0,0.4672215999744367,,Florence-2-base (caption presence)
+negative,5,0,0,0.0,0.2772277999902144,,Florence-2-base (caption presence)
+negative,6,0,0,0.0,0.46174539998173714,,Florence-2-base (caption presence)
+negative,7,0,0,0.0,0.25181019998854026,,Florence-2-base (caption presence)
+negative,8,0,0,0.0,0.2748814999940805,,Florence-2-base (caption presence)
+negative,9,0,0,0.0,0.37760450001223944,,Florence-2-base (caption presence)
+negative,10,0,0,0.0,0.48199500000919215,,Florence-2-base (caption presence)
+positive,1,1,0,0.0,0.29049440001836047,,"Florence-2-base (caption, min_hits=1)"
+positive,2,1,0,0.0,0.23610919999191537,,"Florence-2-base (caption, min_hits=1)"
+positive,3,1,0,0.0,0.23685799998929724,,"Florence-2-base (caption, min_hits=1)"
+positive,4,1,0,0.0,0.4410786999796983,,"Florence-2-base (caption, min_hits=1)"
+positive,5,1,0,0.0,0.4788937999983318,,"Florence-2-base (caption, min_hits=1)"
+positive,6,1,0,0.0,0.318153500003973,,"Florence-2-base (caption, min_hits=1)"
+positive,7,1,0,0.0,0.4668653000262566,,"Florence-2-base (caption, min_hits=1)"
+positive,8,1,0,0.0,0.283007699996233,,"Florence-2-base (caption, min_hits=1)"
+positive,9,1,0,0.0,0.29455290001351386,,"Florence-2-base (caption, min_hits=1)"
+positive,10,1,0,0.0,0.20729829999618232,,"Florence-2-base (caption, min_hits=1)"
+negative,1,0,0,0.0,0.23494520000531338,,"Florence-2-base (caption, min_hits=1)"
+negative,2,0,0,0.0,0.29376329999649897,,"Florence-2-base (caption, min_hits=1)"
+negative,3,0,0,0.0,0.2530331999878399,,"Florence-2-base (caption, min_hits=1)"
+negative,4,0,0,0.0,0.46645300000091083,,"Florence-2-base (caption, min_hits=1)"
+negative,5,0,0,0.0,0.29052119998959824,,"Florence-2-base (caption, min_hits=1)"
+negative,6,0,0,0.0,0.47486170000047423,,"Florence-2-base (caption, min_hits=1)"
+negative,7,0,0,0.0,0.2567129999806639,,"Florence-2-base (caption, min_hits=1)"
+negative,8,0,0,0.0,0.28447139999479987,,"Florence-2-base (caption, min_hits=1)"
+negative,9,0,0,0.0,0.3890164000040386,,"Florence-2-base (caption, min_hits=1)"
+negative,10,0,0,0.0,0.42172179999761283,,"Florence-2-base (caption, min_hits=1)"
+positive,1,1,1,0.5096741914749146,0.0748885000066366,steel sheet: 0.51,Florence-2-base (OVD localisation)
+positive,2,1,1,0.5559134483337402,0.07979729998623952,steel sheet: 0.56,Florence-2-base (OVD localisation)
+positive,3,1,1,0.4387648105621338,0.08027739997487515,steel sheet: 0.44,Florence-2-base (OVD localisation)
+positive,4,1,1,0.5191475749015808,0.07878470001742244,steel sheet: 0.52,Florence-2-base (OVD localisation)
+positive,5,1,1,0.5529159307479858,0.07590920000802726,steel sheet: 0.55,Florence-2-base (OVD localisation)
+positive,6,1,1,0.5336237549781799,0.07375730000785552,steel sheet: 0.53,Florence-2-base (OVD localisation)
+positive,7,1,1,0.5223224759101868,0.07368920001317747,steel sheet: 0.52,Florence-2-base (OVD localisation)
+positive,8,1,1,0.6241161227226257,0.07744430002640001,steel sheet: 0.62,Florence-2-base (OVD localisation)
+positive,9,1,1,0.6055899858474731,0.07444859997485764,steel sheet: 0.61,Florence-2-base (OVD localisation)
+positive,10,1,1,0.43650564551353455,0.09114299999782816,steel sheet: 0.44,Florence-2-base (OVD localisation)
+negative,1,0,1,0.5957788228988647,0.07722269999794662,steel sheet: 0.60,Florence-2-base (OVD localisation)
+negative,2,0,1,0.3864954113960266,0.07476039999164641,steel sheet: 0.39,Florence-2-base (OVD localisation)
+negative,3,0,1,0.5866029262542725,0.0738464999885764,steel sheet: 0.59,Florence-2-base (OVD localisation)
+negative,4,0,2,0.5715168118476868,0.09463949999189936,steel sheet: 0.57,Florence-2-base (OVD localisation)
+negative,5,0,1,0.597972571849823,0.07368979998864233,steel sheet: 0.60,Florence-2-base (OVD localisation)
+negative,6,0,1,0.5827273726463318,0.07232930001919158,steel sheet: 0.58,Florence-2-base (OVD localisation)
+negative,7,0,1,0.41071805357933044,0.07394469997962005,steel sheet: 0.41,Florence-2-base (OVD localisation)
+negative,8,0,1,0.6750684976577759,0.07826450001448393,steel sheet: 0.68,Florence-2-base (OVD localisation)
+negative,9,0,1,0.648173451423645,0.07734389998950064,steel sheet: 0.65,Florence-2-base (OVD localisation)
+negative,10,0,1,0.5485751032829285,0.07456790001015179,steel sheet: 0.55,Florence-2-base (OVD localisation)
+positive,1,1,3600,0.12885363399982452,0.12587829999392852,steel sheet: 0.00,OWLv2-base
+positive,2,1,3600,0.2223622351884842,0.1318549000134226,steel sheet: 0.00,OWLv2-base
+positive,3,1,3600,0.22253112494945526,0.13096759998006746,steel sheet: 0.00,OWLv2-base
+positive,4,1,3600,0.13488984107971191,0.13042539998423308,steel sheet: 0.00,OWLv2-base
+positive,5,1,3600,0.12085322290658951,0.13251240001409315,steel sheet: 0.00,OWLv2-base
+positive,6,1,3600,0.09999629855155945,0.13184580000233836,steel sheet: 0.00,OWLv2-base
+positive,7,1,3600,0.08709682524204254,0.13107840000884607,steel sheet: 0.00,OWLv2-base
+positive,8,1,3600,0.20833994448184967,0.13065720000304282,steel sheet: 0.00,OWLv2-base
+positive,9,1,3600,0.2531217932701111,0.13063370002782904,steel sheet: 0.00,OWLv2-base
+positive,10,1,3600,0.16885694861412048,0.13062539999373257,steel sheet: 0.00,OWLv2-base
+negative,1,0,3600,0.21011726558208466,0.13040519997593947,steel sheet: 0.00,OWLv2-base
+negative,2,0,3600,0.07599521428346634,0.13039099998422898,steel sheet: 0.00,OWLv2-base
+negative,3,0,3600,0.20946967601776123,0.13049179999507032,steel sheet: 0.00,OWLv2-base
+negative,4,0,3600,0.07159119844436646,0.1308339000097476,steel sheet: 0.00,OWLv2-base
+negative,5,0,3600,0.06221698224544525,0.12819020001916215,steel sheet: 0.00,OWLv2-base
+negative,6,0,3600,0.06705628335475922,0.1263258999970276,steel sheet: 0.00,OWLv2-base
+negative,7,0,3600,0.10176784545183182,0.12782990001142025,steel sheet: 0.00,OWLv2-base
+negative,8,0,3600,0.2030746340751648,0.1280034999945201,steel sheet: 0.00,OWLv2-base
+negative,9,0,3600,0.12549343705177307,0.12902190000750124,steel sheet: 0.00,OWLv2-base
+negative,10,0,3600,0.09518112242221832,0.12980909997713752,steel sheet: 0.00,OWLv2-base
+positive,1,1,1,0.8582242131233215,0.26133090001530945,steel sheet: 0.86,Grounding DINO (tiny)
+positive,2,1,2,0.5786873698234558,0.2538813999854028,steel sheet: 0.58,Grounding DINO (tiny)
+positive,3,1,2,0.4494694769382477,0.26411259997985326,steel sheet: 0.45,Grounding DINO (tiny)
+positive,4,1,1,0.85670405626297,0.2641192000010051,steel sheet: 0.86,Grounding DINO (tiny)
+positive,5,1,1,0.8647361993789673,0.2545375000045169,steel sheet: 0.86,Grounding DINO (tiny)
+positive,6,1,1,0.8313305377960205,0.25996650001616217,steel sheet: 0.83,Grounding DINO (tiny)
+positive,7,1,1,0.8073688745498657,0.2636468000127934,steel sheet: 0.81,Grounding DINO (tiny)
+positive,8,1,2,0.5956116914749146,0.2584501000237651,steel sheet: 0.60,Grounding DINO (tiny)
+positive,9,1,2,0.495347797870636,0.264125999994576,steel sheet: 0.50,Grounding DINO (tiny)
+positive,10,1,2,0.4963620603084564,0.25775050002266653,steel sheet: 0.50,Grounding DINO (tiny)
+negative,1,0,1,0.9040204286575317,0.25731309998081997,steel sheet: 0.90,Grounding DINO (tiny)
+negative,2,0,1,0.814780592918396,0.2585409999883268,steel sheet: 0.81,Grounding DINO (tiny)
+negative,3,0,1,0.8921374678611755,0.2616795999929309,steel sheet: 0.89,Grounding DINO (tiny)
+negative,4,0,2,0.45187196135520935,0.26180599999497645,steel sheet: 0.45,Grounding DINO (tiny)
+negative,5,0,1,0.7430190443992615,0.25388659999589436,steel sheet: 0.74,Grounding DINO (tiny)
+negative,6,0,1,0.8460111021995544,0.2646736000024248,steel sheet: 0.85,Grounding DINO (tiny)
+negative,7,0,1,0.8709583878517151,0.26288240001304075,steel sheet: 0.87,Grounding DINO (tiny)
+negative,8,0,2,0.47703438997268677,0.2644862000015564,steel sheet: 0.48,Grounding DINO (tiny)
+negative,9,0,2,0.48989585041999817,0.26473140000598505,steel sheet: 0.49,Grounding DINO (tiny)
+negative,10,0,1,0.797843337059021,0.2561126000073273,steel sheet: 0.80,Grounding DINO (tiny)
+positive,1,1,3600,0.19513355195522308,0.13048950000666082,steel sheet: 0.00,OWLv2-base + CLAHE
+positive,2,1,3600,0.3459886312484741,0.12771470000734553,steel sheet: 0.00,OWLv2-base + CLAHE
+positive,3,1,3600,0.33274388313293457,0.13221539999358356,steel sheet: 0.00,OWLv2-base + CLAHE
+positive,4,1,3600,0.2732833921909332,0.1290891999960877,steel sheet: 0.00,OWLv2-base + CLAHE
+positive,5,1,3600,0.3263787627220154,0.13445719997980632,steel sheet: 0.00,OWLv2-base + CLAHE
+positive,6,1,3600,0.2752270996570587,0.1310216000129003,steel sheet: 0.00,OWLv2-base + CLAHE
+positive,7,1,3600,0.2949252128601074,0.13182059998507611,steel sheet: 0.00,OWLv2-base + CLAHE
+positive,8,1,3600,0.355663001537323,0.1312370999949053,steel sheet: 0.01,OWLv2-base + CLAHE
+positive,9,1,3600,0.2719278931617737,0.12899129997822456,steel sheet: 0.01,OWLv2-base + CLAHE
+positive,10,1,3600,0.26759952306747437,0.1304938000102993,steel sheet: 0.00,OWLv2-base + CLAHE
+negative,1,0,3600,0.40697982907295227,0.13165660001686774,steel sheet: 0.00,OWLv2-base + CLAHE
+negative,2,0,3600,0.19821932911872864,0.13157440000213683,steel sheet: 0.00,OWLv2-base + CLAHE
+negative,3,0,3600,0.41507667303085327,0.12682069998118095,steel sheet: 0.00,OWLv2-base + CLAHE
+negative,4,0,3600,0.2330075204372406,0.13257459999294952,steel sheet: 0.00,OWLv2-base + CLAHE
+negative,5,0,3600,0.2730894684791565,0.13153670000610873,steel sheet: 0.00,OWLv2-base + CLAHE
+negative,6,0,3600,0.2722179889678955,0.13354229999822564,steel sheet: 0.00,OWLv2-base + CLAHE
+negative,7,0,3600,0.25515803694725037,0.13570630000322126,steel sheet: 0.00,OWLv2-base + CLAHE
+negative,8,0,3600,0.24274376034736633,0.1330065000220202,steel sheet: 0.00,OWLv2-base + CLAHE
+negative,9,0,3600,0.4007493853569031,0.1303601000108756,steel sheet: 0.00,OWLv2-base + CLAHE
+negative,10,0,3600,0.22832854092121124,0.13292510001338087,steel sheet: 0.00,OWLv2-base + CLAHE
+positive,1,1,1,0.8315158486366272,0.25738039999851026,steel sheet: 0.83,Grounding DINO (tiny) + CLAHE
+positive,2,1,2,0.6239285469055176,0.2683716000174172,steel sheet: 0.62,Grounding DINO (tiny) + CLAHE
+positive,3,1,2,0.45096445083618164,0.28303339998819865,steel sheet: 0.45,Grounding DINO (tiny) + CLAHE
+positive,4,1,1,0.7087698578834534,0.273859499982791,steel sheet: 0.71,Grounding DINO (tiny) + CLAHE
+positive,5,1,1,0.8001845479011536,0.2706056000024546,steel sheet: 0.80,Grounding DINO (tiny) + CLAHE
+positive,6,1,1,0.7576194405555725,0.27380269998684525,steel sheet: 0.76,Grounding DINO (tiny) + CLAHE
+positive,7,1,1,0.6757152080535889,0.26886959999683313,steel sheet: 0.68,Grounding DINO (tiny) + CLAHE
+positive,8,1,2,0.6423333883285522,0.26579710000078194,steel sheet: 0.64,Grounding DINO (tiny) + CLAHE
+positive,9,1,2,0.5212218761444092,0.2585465000011027,steel sheet: 0.52,Grounding DINO (tiny) + CLAHE
+positive,10,1,2,0.5475385189056396,0.25361779998638667,steel sheet: 0.55,Grounding DINO (tiny) + CLAHE
+negative,1,0,1,0.8925005197525024,0.25523929999326356,steel sheet: 0.89,Grounding DINO (tiny) + CLAHE
+negative,2,0,1,0.8079525828361511,0.2543151999998372,steel sheet: 0.81,Grounding DINO (tiny) + CLAHE
+negative,3,0,1,0.8816320300102234,0.2660213999915868,steel sheet: 0.88,Grounding DINO (tiny) + CLAHE
+negative,4,0,1,0.4979743957519531,0.26440630000433885,steel sheet: 0.50,Grounding DINO (tiny) + CLAHE
+negative,5,0,1,0.8154825568199158,0.2655903000268154,steel sheet: 0.82,Grounding DINO (tiny) + CLAHE
+negative,6,0,1,0.8636937141418457,0.25980659999186173,steel sheet: 0.86,Grounding DINO (tiny) + CLAHE
+negative,7,0,1,0.8817655444145203,0.2660950999998022,steel sheet: 0.88,Grounding DINO (tiny) + CLAHE
+negative,8,0,2,0.5197195410728455,0.2610612999997102,steel sheet: 0.52,Grounding DINO (tiny) + CLAHE
+negative,9,0,2,0.5758121609687805,0.2531563999946229,steel sheet: 0.58,Grounding DINO (tiny) + CLAHE
+negative,10,0,1,0.7196049094200134,0.26576229999773204,steel sheet: 0.72,Grounding DINO (tiny) + CLAHE
+positive,1,1,5120,0.14069005846977234,0.2456110999919474,steel sheet: 0.00,OWLv2-base @ 1280x1024
+positive,2,1,5120,0.18579943478107452,0.24893519998295233,steel sheet: 0.00,OWLv2-base @ 1280x1024
+positive,3,1,5120,0.2889702320098877,0.24784190001082607,steel sheet: 0.00,OWLv2-base @ 1280x1024
+positive,4,1,5120,0.1367236226797104,0.24978690000716597,steel sheet: 0.00,OWLv2-base @ 1280x1024
+positive,5,1,5120,0.12023206055164337,0.24722380001912825,steel sheet: 0.00,OWLv2-base @ 1280x1024
+positive,6,1,5120,0.12304913252592087,0.24217069998849183,steel sheet: 0.00,OWLv2-base @ 1280x1024
+positive,7,1,5120,0.10034840553998947,0.2463638000190258,steel sheet: 0.00,OWLv2-base @ 1280x1024
+positive,8,1,5120,0.20882359147071838,0.24773460000869818,steel sheet: 0.00,OWLv2-base @ 1280x1024
+positive,9,1,5120,0.281504362821579,0.2470315000100527,steel sheet: 0.00,OWLv2-base @ 1280x1024
+positive,10,1,5120,0.19636347889900208,0.25023249999503605,steel sheet: 0.00,OWLv2-base @ 1280x1024
+negative,1,0,5120,0.20134170353412628,0.2488010000088252,steel sheet: 0.00,OWLv2-base @ 1280x1024
+negative,2,0,5120,0.07504072040319443,0.24465129998861812,steel sheet: 0.00,OWLv2-base @ 1280x1024
+negative,3,0,5120,0.2994123697280884,0.2478633999999147,steel sheet: 0.00,OWLv2-base @ 1280x1024
+negative,4,0,5120,0.08035746961832047,0.24576099999831058,steel sheet: 0.00,OWLv2-base @ 1280x1024
+negative,5,0,5120,0.0633663460612297,0.24850419998983853,steel sheet: 0.00,OWLv2-base @ 1280x1024
+negative,6,0,5120,0.08404061198234558,0.2408276000060141,steel sheet: 0.00,OWLv2-base @ 1280x1024
+negative,7,0,5120,0.08586245775222778,0.24717310001142323,steel sheet: 0.00,OWLv2-base @ 1280x1024
+negative,8,0,5120,0.19360435009002686,0.24642789998324588,steel sheet: 0.00,OWLv2-base @ 1280x1024
+negative,9,0,5120,0.3205021917819977,0.23999870000989176,steel sheet: 0.00,OWLv2-base @ 1280x1024
+negative,10,0,5120,0.10105590522289276,0.24656729999696836,steel sheet: 0.00,OWLv2-base @ 1280x1024
+positive,1,1,0,0.3448087275028229,0.13062449998687953,,OWLv2-base margin vs rivals
+positive,2,1,0,0.3246106505393982,0.13360309999552555,,OWLv2-base margin vs rivals
+positive,3,1,0,0.31387224793434143,0.1305047000059858,,OWLv2-base margin vs rivals
+positive,4,1,0,0.26288625597953796,0.13076979998731986,,OWLv2-base margin vs rivals
+positive,5,1,0,0.21182824671268463,0.13209130000905134,,OWLv2-base margin vs rivals
+positive,6,1,0,0.3062605857849121,0.130979399982607,,OWLv2-base margin vs rivals
+positive,7,1,0,0.3279837667942047,0.13023049998446368,,OWLv2-base margin vs rivals
+positive,8,1,0,0.3412724733352661,0.12996540000312962,,OWLv2-base margin vs rivals
+positive,9,1,0,0.3096795976161957,0.12828699999954551,,OWLv2-base margin vs rivals
+positive,10,1,0,0.34208595752716064,0.13003200001548976,,OWLv2-base margin vs rivals
+negative,1,0,0,0.2554314434528351,0.13146880001295358,,OWLv2-base margin vs rivals
+negative,2,0,0,0.31541377305984497,0.12753200001316145,,OWLv2-base margin vs rivals
+negative,3,0,0,0.2758007347583771,0.13019830000121146,,OWLv2-base margin vs rivals
+negative,4,0,0,0.32344576716423035,0.13013130001490936,,OWLv2-base margin vs rivals
+negative,5,0,0,0.30746889114379883,0.13080029998673126,,OWLv2-base margin vs rivals
+negative,6,0,0,0.3653147518634796,0.13244009998743422,,OWLv2-base margin vs rivals
+negative,7,0,0,0.3954475224018097,0.12937870001769625,,OWLv2-base margin vs rivals
+negative,8,0,0,0.34264519810676575,0.1303697999974247,,OWLv2-base margin vs rivals
+negative,9,0,0,0.37843024730682373,0.1324460000032559,,OWLv2-base margin vs rivals
+negative,10,0,0,0.3314390480518341,0.12801529999705963,,OWLv2-base margin vs rivals
+positive,1,1,0,0.3247429132461548,0.2470644999993965,,OWLv2-base @ 1280x1024 + margin
+positive,2,1,0,0.2772729992866516,0.24661380000179633,,OWLv2-base @ 1280x1024 + margin
+positive,3,1,0,0.31163787841796875,0.24852669998654164,,OWLv2-base @ 1280x1024 + margin
+positive,4,1,0,0.2607887089252472,0.25154580001253635,,OWLv2-base @ 1280x1024 + margin
+positive,5,1,0,0.20560646057128906,0.24283289999584667,,OWLv2-base @ 1280x1024 + margin
+positive,6,1,0,0.26971521973609924,0.24930620001396164,,OWLv2-base @ 1280x1024 + margin
+positive,7,1,0,0.28412583470344543,0.2502137999981642,,OWLv2-base @ 1280x1024 + margin
+positive,8,1,0,0.3133147358894348,0.24723920001997612,,OWLv2-base @ 1280x1024 + margin
+positive,9,1,0,0.330355167388916,0.2466355999931693,,OWLv2-base @ 1280x1024 + margin
+positive,10,1,0,0.3627041280269623,0.24630760002764873,,OWLv2-base @ 1280x1024 + margin
+negative,1,0,0,0.2552869915962219,0.24356729999999516,,OWLv2-base @ 1280x1024 + margin
+negative,2,0,0,0.3185485303401947,0.24522219999926165,,OWLv2-base @ 1280x1024 + margin
+negative,3,0,0,0.2763594388961792,0.24681389998295344,,OWLv2-base @ 1280x1024 + margin
+negative,4,0,0,0.30040010809898376,0.24474669998744503,,OWLv2-base @ 1280x1024 + margin
+negative,5,0,0,0.2892424166202545,0.24819109999225475,,OWLv2-base @ 1280x1024 + margin
+negative,6,0,0,0.3503439426422119,0.24785029998747632,,OWLv2-base @ 1280x1024 + margin
+negative,7,0,0,0.3812110424041748,0.25007650000043213,,OWLv2-base @ 1280x1024 + margin
+negative,8,0,0,0.3190845847129822,0.24484889997984283,,OWLv2-base @ 1280x1024 + margin
+negative,9,0,0,0.3644128441810608,0.25086849997751415,,OWLv2-base @ 1280x1024 + margin
+negative,10,0,0,0.29504233598709106,0.250818700005766,,OWLv2-base @ 1280x1024 + margin
+positive,1,1,1,0.4361248016357422,0.2567043000017293,steel sheet: 0.26,Grounding DINO (tiny) margin vs rivals
+positive,2,1,1,0.4965052604675293,0.2564501999877393,steel sheet: 0.41,Grounding DINO (tiny) margin vs rivals
+positive,3,1,1,0.4856770634651184,0.25708129999111407,steel sheet: 0.30,Grounding DINO (tiny) margin vs rivals
+positive,4,1,1,0.5249804258346558,0.2664707000076305,steel sheet: 0.39,Grounding DINO (tiny) margin vs rivals
+positive,5,1,1,0.49912509322166443,0.2630866999970749,steel sheet: 0.44,Grounding DINO (tiny) margin vs rivals
+positive,6,1,1,0.5386636257171631,0.26360180001938716,steel sheet: 0.49,Grounding DINO (tiny) margin vs rivals
+positive,7,1,1,0.5670838356018066,0.2679439000203274,steel sheet: 0.53,Grounding DINO (tiny) margin vs rivals
+positive,8,1,1,0.401162326335907,0.2594064000004437,steel sheet: 0.34,Grounding DINO (tiny) margin vs rivals
+positive,9,1,1,0.5044317841529846,0.26638469999306835,steel sheet: 0.44,Grounding DINO (tiny) margin vs rivals
+positive,10,1,1,0.5066165924072266,0.25934059999417514,steel sheet: 0.42,Grounding DINO (tiny) margin vs rivals
+negative,1,0,1,0.5179361701011658,0.2608967999985907,steel sheet: 0.36,Grounding DINO (tiny) margin vs rivals
+negative,2,0,1,0.5195765495300293,0.26287249999586493,steel sheet: 0.48,Grounding DINO (tiny) margin vs rivals
+negative,3,0,1,0.5493365526199341,0.26874070000485517,steel sheet: 0.41,Grounding DINO (tiny) margin vs rivals
+negative,4,0,1,0.555282473564148,0.26459170001908205,steel sheet: 0.53,Grounding DINO (tiny) margin vs rivals
+negative,5,0,1,0.481109082698822,0.26401119999354705,steel sheet: 0.41,Grounding DINO (tiny) margin vs rivals
+negative,6,0,1,0.5001775622367859,0.2578209000057541,steel sheet: 0.47,Grounding DINO (tiny) margin vs rivals
+negative,7,0,1,0.5403591990470886,0.25879079999867827,steel sheet: 0.45,Grounding DINO (tiny) margin vs rivals
+negative,8,0,1,0.5527183413505554,0.26163890000316314,steel sheet: 0.53,Grounding DINO (tiny) margin vs rivals
+negative,9,0,1,0.48049283027648926,0.2663526999822352,steel sheet: 0.47,Grounding DINO (tiny) margin vs rivals
+negative,10,0,1,0.49166831374168396,0.2578654999961145,steel sheet: 0.51,Grounding DINO (tiny) margin vs rivals

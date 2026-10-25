@@ -11,16 +11,18 @@
 #   * ultralytics - YOLO-World, and it is the reason this file is not part of any
 #     production image (AGPL-3.0; see src/benchmark/registry.py)
 #   * onnxruntime - the CPU path for the incumbent artifact, identical to the cluster
-torch>=2.6,<3
-torchvision>=0.21,<1
-transformers==5.20.1
+--extra-index-url https://download.pytorch.org/whl/cu132
+torch==2.14.0+cu132
+torchvision==0.29.0+cu132
+torchaudio==2.13.0+cu132
+transformers==4.49.0
 timm>=1.0
 ultralytics>=8.3
 # YOLO-World builds its class embeddings with CLIP. Without it ultralytics installs the
 # package at import time ("requirements: AutoUpdate"), which cost three minutes inside the
 # first measurement and left that model without usable classes. PyPI's ``clip`` stops at
 # 0.2.0 and is a different package, so the fork ultralytics itself uses is pinned by URL.
-clip @ git+https://github.com/ultralytics/CLIP.git
+# clip @ git+https://github.com/ultralytics/CLIP.git
 ftfy>=6.3
 accelerate>=1.0
 sentencepiece>=0.2
@@ -32,3 +34,4 @@ onnxruntime==1.24.4
 numpy<2.0.0
 pillow>=11
 psutil>=6
+nvidia-ml-py>=11.495.46
